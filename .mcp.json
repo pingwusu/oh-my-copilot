@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "omcp-state": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/state-server.js"],
+      "description": "State, notepad, project-memory, and trace persistence for omcp sessions"
+    }
+  }
+}

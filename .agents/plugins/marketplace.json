@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/copilot-cli-marketplace.json",
+  "name": "oh-my-copilot",
+  "description": "oh-my-copilot plugin marketplace — multi-agent orchestration for GitHub Copilot CLI",
+  "owner": {
+    "name": "oh-my-copilot contributors"
+  },
+  "plugins": [
+    {
+      "name": "oh-my-copilot",
+      "description": "Multi-agent orchestration layer with Claude + GPT dual-model agent routing, ralph/autopilot/team/ultraqa workflows, and a curated skill+agent catalog adapted for Copilot CLI",
+      "source": {
+        "type": "github",
+        "repo": "TBD/oh-my-copilot",
+        "subdirectory": "."
+      },
+      "version": "0.1.0",
+      "tags": ["orchestration", "multi-agent", "ralph", "autopilot", "team"]
+    }
+  ]
+}

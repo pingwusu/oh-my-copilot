@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/omcp-explore-harness"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+authors = ["oh-my-copilot contributors"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+strip = "symbols"

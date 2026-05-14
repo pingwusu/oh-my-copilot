@@ -1,0 +1,77 @@
+{
+  "name": "oh-my-copilot",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration layer for GitHub Copilot CLI — Claude+GPT dual-model, inspired by oh-my-claudecode and oh-my-codex",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "omcp": "dist/cli/omcp.js",
+    "oh-my-copilot": "dist/cli/omcp.js"
+  },
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc && node -e \"require('fs').chmodSync('dist/cli/omcp.js', 0o755)\"",
+    "build:rust": "cargo build --release",
+    "build:full": "npm run build && npm run build:rust",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:rust": "cargo test",
+    "lint": "biome lint src",
+    "format": "biome format --write src",
+    "setup": "node dist/cli/omcp.js setup",
+    "doctor": "node dist/cli/omcp.js doctor",
+    "verify:plugin-bundle": "node dist/scripts/verify-plugin-bundle.js",
+    "verify:catalog": "node dist/scripts/verify-catalog.js",
+    "prepack": "npm run build && npm run verify:plugin-bundle"
+  },
+  "files": [
+    "dist/",
+    "Cargo.toml",
+    "Cargo.lock",
+    "crates/",
+    "agents/",
+    "skills/",
+    "prompts/",
+    "templates/",
+    "plugins/",
+    ".claude-plugin/",
+    ".agents/plugins/marketplace.json",
+    ".mcp.json",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "chalk": "^5.3.0",
+    "zod": "^3.23.8",
+    "jsonc-parser": "^3.3.1",
+    "@modelcontextprotocol/sdk": "^1.26.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/node": "^22.19.7",
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.17"
+  },
+  "keywords": [
+    "copilot",
+    "github-copilot",
+    "copilot-cli",
+    "ai",
+    "agent",
+    "multi-agent",
+    "orchestration",
+    "omcp",
+    "claude",
+    "gpt"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
