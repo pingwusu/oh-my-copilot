@@ -1,0 +1,22 @@
+{
+  "name": "oh-my-copilot",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration for GitHub Copilot CLI (Claude + GPT dual-model)",
+  "author": {
+    "name": "oh-my-copilot contributors"
+  },
+  "repository": "TBD",
+  "homepage": "TBD",
+  "license": "MIT",
+  "keywords": [
+    "copilot",
+    "copilot-cli",
+    "plugin",
+    "multi-agent",
+    "orchestration",
+    "automation"
+  ],
+  "agents": "./agents/",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json"
+}
