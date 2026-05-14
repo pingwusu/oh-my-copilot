@@ -22,6 +22,8 @@
     "doctor": "node dist/cli/omcp.js doctor",
     "verify:plugin-bundle": "node dist/scripts/verify-plugin-bundle.js",
     "verify:catalog": "node dist/scripts/verify-catalog.js",
+    "smoke:e2e": "node dist/scripts/smoke-e2e.js",
+    "sync:plugin": "node dist/scripts/sync-plugin-mirror.js",
     "prepack": "npm run build && npm run verify:plugin-bundle"
   },
   "files": [

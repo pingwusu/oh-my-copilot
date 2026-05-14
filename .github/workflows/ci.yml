@@ -26,6 +26,7 @@ jobs:
       - run: node dist/scripts/verify-catalog.js
       - run: node dist/scripts/verify-plugin-bundle.js
       - run: npm test
+      - run: node dist/scripts/smoke-e2e.js
 
   rust:
     name: Cargo build & test

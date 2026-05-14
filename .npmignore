@@ -1,0 +1,26 @@
+.git/
+.github/
+.omc/
+.omcp/
+docs/
+src/
+tests/
+benchmarks/
+research/
+
+# Configs
+tsconfig.json
+vitest.config.ts
+biome.json
+.gitignore
+.npmignore
+
+# IDE
+.vscode/
+.idea/
+
+# Dev artifacts
+*.log
+*.tsbuildinfo
+coverage/
+target/
