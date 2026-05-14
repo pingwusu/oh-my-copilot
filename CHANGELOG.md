@@ -36,8 +36,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - File + in-memory `StateStore` for `.omcp/state/sessions/<id>.json`
 - CI matrix (linux+macos+windows × node 20+22) plus a separate cargo job
 
+### Verification (2026-05-15)
+
+Live install on the dev host:
+
+```
+$ omcp setup
+omcp setup complete
+  plugin     -> C:\Users\runjiashi\.copilot\installed-plugins\oh-my-copilot\oh-my-copilot
+  marketplace -> C:\Users\runjiashi\.copilot\marketplaces\oh-my-copilot.json
+  config.json updated: true
+  mcp-config.json updated: true
+
+$ omcp doctor
+[OK ] copilot CLI                  GitHub Copilot CLI 1.0.32.
+[OK ] ~/.copilot directory         C:\Users\runjiashi\.copilot
+[OK ] oh-my-copilot plugin cache   ...installed-plugins\oh-my-copilot\oh-my-copilot
+[OK ] plugin manifest              version 0.1.0
+[OK ] mcp-config.json              C:\Users\runjiashi\.copilot\mcp-config.json
+[OK ] agent catalog                ...\oh-my-copilot\oh-my-copilot/agents
+
+$ copilot plugin list
+Installed plugins:
+  • ralph-wiggum@claude-code-plugins (v1.0.0)
+  • oh-my-claudecode@omc (v4.13.0)
+  • oh-my-copilot@oh-my-copilot (v0.1.0)
+```
+
+Copilot CLI 1.0.32 recognizes oh-my-copilot as a first-class plugin
+alongside oh-my-claudecode. Plugin cache layout (agents/ + skills/ +
+.claude-plugin/plugin.json + .mcp.json + AGENTS.md + CLAUDE.md) mirrors
+the omc install structure exactly.
+
+### Final v0.1 catalog
+
+- Agents (19/19): analyst, architect, code-reviewer, code-simplifier, critic, debugger, designer, document-specialist, executor, explore, git-master, planner, qa-tester, scientist, security-reviewer, test-engineer, tracer, verifier, writer
+- Skills (31/31): ai-slop-cleaner, ask, autopilot, cancel, ccg, configure-notifications, deep-dive, deep-interview, deepinit, external-context, hud, learner, mcp-setup, omcp-doctor, omcp-reference, omcp-setup, omcp-teams, plan, project-session-manager, ralph, ralplan, release, sciomc, setup, skill, team, trace, ultraqa, ultrawork, visual-verdict, writer-memory
+
 ### Notes
 
-- M3 will land remaining skills (~13), wire the Rust explore harness, and complete model-routing edge cases
-- M4 will land hooks runtime + HUD + state MCP server stdio wrapper
-- M5 will land release automation + marketplace registration + screenshots
+- M3 follow-up: wire the Rust explore harness, polish model-routing edge cases, port remaining sub-files (writer-memory/lib/, omcp-setup/phases/)
+- M4 follow-up: hooks runtime + HUD + state MCP server stdio wrapper
+- M5 follow-up: release automation + marketplace registration + screenshots
