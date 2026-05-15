@@ -26,6 +26,8 @@ const SOURCE_ROOTS = [
   "skills",
   "prompts",
   "templates",
+  "hooks",
+  "dist",
   ".claude-plugin",
 ];
 

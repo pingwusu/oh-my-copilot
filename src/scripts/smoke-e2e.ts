@@ -2,17 +2,22 @@
 // OMCP_HOME and asserts non-zero coverage. Used in CI and locally.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dirname ?? __dirname, "..", "..");
 const CLI = join(ROOT, "dist", "cli", "omcp.js");
 
-function run(args: string[], env: NodeJS.ProcessEnv): { code: number; stdout: string; stderr: string } {
+function run(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  input?: string,
+): { code: number; stdout: string; stderr: string } {
   const r = spawnSync(process.execPath, [CLI, ...args], {
     env: { ...process.env, ...env },
     encoding: "utf8",
+    input,
   });
   return { code: r.status ?? -1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -71,6 +76,58 @@ function main() {
     doctor.stdout.includes("oh-my-copilot plugin cache"),
     "doctor reports plugin cache check",
   );
+
+  // hook fire path — should exit 0 and emit JSON when --json is passed.
+  const hookSandbox = mkdtempSync(join(tmpdir(), "omcp-smoke-hook-"));
+  mkdirSync(join(hookSandbox, ".omcp", "hooks"), { recursive: true });
+  writeFileSync(
+    join(hookSandbox, ".omcp", "hooks", "PreToolUse-test.mjs"),
+    [
+      "export default {",
+      '  name: "smoke-pre-test",',
+      '  events: ["PreToolUse"],',
+      '  async run() { return { kind: "advise", text: "smoke-ok" }; }',
+      "};",
+    ].join("\n"),
+    "utf8",
+  );
+  const hookEnv = { ...env, OMCP_PLUGIN_ROOT: join(hookSandbox, "_no_plugin_") };
+  const hookFire = spawnSync(
+    process.execPath,
+    [CLI, "hook", "fire", "PreToolUse", "--json"],
+    {
+      env: { ...process.env, ...hookEnv },
+      cwd: hookSandbox,
+      encoding: "utf8",
+      input: JSON.stringify({ sessionId: "s1", cwd: hookSandbox }),
+    },
+  );
+  assert(hookFire.status === 0, "omcp hook fire PreToolUse --json exits 0");
+  assert(
+    hookFire.stdout.includes("smoke-pre-test") &&
+      hookFire.stdout.includes("smoke-ok"),
+    "hook fire JSON contains repo-local hook result",
+  );
+  // Validate JSON shape.
+  try {
+    const parsed = JSON.parse(hookFire.stdout.trim()) as {
+      event: string;
+      results: Array<{ hook: string; result: { kind: string } }>;
+    };
+    assert(parsed.event === "PreToolUse", "hook fire JSON event field correct");
+    assert(
+      Array.isArray(parsed.results) && parsed.results.length >= 1,
+      "hook fire JSON results array non-empty",
+    );
+  } catch (err) {
+    assert(false, `hook fire JSON parses: ${(err as Error).message}`);
+  }
+
+  // hud — must print a single line and exit 0 even with no state.
+  const hud = run(["hud"], env);
+  assert(hud.code === 0, "omcp hud exits 0");
+  assert(hud.stdout.split("\n").filter((l) => l.length > 0).length === 1, "omcp hud prints a single line");
+  assert(hud.stdout.startsWith("omcp"), "omcp hud line starts with 'omcp'");
 
   console.log("\nsmoke-e2e: all assertions passed");
 }

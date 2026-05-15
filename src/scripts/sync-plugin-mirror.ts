@@ -22,6 +22,8 @@ const DIR_SOURCES = [
   "skills",
   "prompts",
   "templates",
+  "hooks",
+  "dist",
   ".claude-plugin",
 ];
 const FILE_SOURCES = [".mcp.json", "AGENTS.md", "CLAUDE.md", "README.md"];

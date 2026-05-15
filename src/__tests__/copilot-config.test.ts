@@ -61,13 +61,13 @@ describe("mergeMcpServers", () => {
         mcpServers: {
           "omcp-state": {
             command: "node",
-            args: ["${PLUGIN_ROOT}/dist/mcp/state-server.js"],
+            args: ["${PLUGIN_ROOT}/dist/mcp/state-server-main.js"],
           },
         },
       },
     );
     expect(result.mcpServers!["omcp-state"].args).toEqual([
-      "/plugin/root/dist/mcp/state-server.js",
+      "/plugin/root/dist/mcp/state-server-main.js",
     ]);
   });
 

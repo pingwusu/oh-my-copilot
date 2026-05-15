@@ -41,8 +41,11 @@ describe("runSetup", () => {
 
     const mcp = JSON.parse(readFileSync(join(tmp, "mcp-config.json"), "utf8"));
     expect(mcp.mcpServers["omcp-state"]).toBeDefined();
-    expect(mcp.mcpServers["omcp-state"].args[0]).toContain("dist/mcp/state-server.js");
+    expect(mcp.mcpServers["omcp-state"].args[0]).toContain("dist/mcp/state-server-main.js");
     expect(mcp.mcpServers["omcp-state"].args[0]).not.toContain("${PLUGIN_ROOT}");
+    expect(mcp.mcpServers["omcp-notepad"]).toBeDefined();
+    expect(mcp.mcpServers["omcp-trace"]).toBeDefined();
+    expect(mcp.mcpServers["omcp-project-memory"]).toBeDefined();
   });
 
   it("dry-run writes nothing", async () => {

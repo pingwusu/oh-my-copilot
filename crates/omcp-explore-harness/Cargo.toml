@@ -11,3 +11,8 @@ name = "omcp-explore"
 path = "src/main.rs"
 
 [dependencies]
+regex = "1.10"
+walkdir = "2.5"
+
+[dev-dependencies]
+assert_cmd = "2.0"

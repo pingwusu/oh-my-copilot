@@ -2,8 +2,23 @@
   "mcpServers": {
     "omcp-state": {
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/dist/mcp/state-server.js"],
+      "args": ["${PLUGIN_ROOT}/dist/mcp/state-server-main.js"],
       "description": "State, notepad, project-memory, and trace persistence for omcp sessions"
+    },
+    "omcp-notepad": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/notepad-server.js"],
+      "description": "Shared notepad with priority/working/manual sections"
+    },
+    "omcp-trace": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/trace-server.js"],
+      "description": "Append-only causal trace storage with summary + timeline queries"
+    },
+    "omcp-project-memory": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/project-memory-server.js"],
+      "description": "Long-lived project memory: notes, directives, structured data"
     }
   }
 }

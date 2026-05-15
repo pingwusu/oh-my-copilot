@@ -1,0 +1,3 @@
+first line
+second line with MARKER_NEEDLE in it
+third line

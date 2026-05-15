@@ -2,9 +2,11 @@
 // omcp CLI entry — commander-based dispatcher.
 
 import { Command } from "commander";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runFireCli } from "../hooks/runtime.js";
 import { runAsk } from "./commands/ask.js";
 import {
   exitCodeFor,
@@ -77,6 +79,46 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         process.exitCode = code;
       },
     );
+
+  program
+    .command("hook")
+    .description("Hook subsystem (e.g. `omcp hook fire <event>`)")
+    .argument("<action>", "hook action — currently only 'fire'")
+    .argument("<event>", "Hook event name (PreToolUse, PostToolUse, …)")
+    .option("--json", "emit machine-readable JSON to stdout")
+    .action(
+      async (
+        action: string,
+        event: string,
+        opts: { json?: boolean },
+      ) => {
+        if (action !== "fire") {
+          console.error(`omcp hook: unknown action "${action}"`);
+          process.exitCode = 2;
+          return;
+        }
+        const code = await runFireCli({ event, json: opts.json });
+        process.exitCode = code;
+      },
+    );
+
+  program
+    .command("hud")
+    .description("Print a single-line omcp status bar (for status-line configs)")
+    .action(() => {
+      const hudScript = resolve(packageRoot, "scripts", "omcp-hud.mjs");
+      const child = spawn(process.execPath, [hudScript], {
+        stdio: ["ignore", "inherit", "inherit"],
+        env: process.env,
+      });
+      child.on("close", (code) => {
+        process.exitCode = code ?? 0;
+      });
+      child.on("error", () => {
+        process.stdout.write("omcp · (status unavailable)\n");
+        process.exitCode = 0;
+      });
+    });
 
   program
     .command("team <spec> <task>")
