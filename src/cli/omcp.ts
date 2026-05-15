@@ -64,17 +64,24 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     )
     .option("--silent", "suppress stats banner from Copilot")
     .option("--no-allow-all-tools", "do not pass --allow-all-tools")
+    .option("--agent <name>", "use a specific omcp agent's recommended model")
     .action(
       (
         family: string,
         prompt: string,
-        opts: { silent?: boolean; allowAllTools?: boolean },
+        opts: {
+          silent?: boolean;
+          allowAllTools?: boolean;
+          agent?: string;
+        },
       ) => {
         const code = runAsk({
           family,
           prompt,
           silent: opts.silent,
           allowAllTools: opts.allowAllTools,
+          agent: opts.agent,
+          agentsDir: resolve(packageRoot, "agents"),
         });
         process.exitCode = code;
       },

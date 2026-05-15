@@ -24,6 +24,7 @@
     "verify:catalog": "node dist/scripts/verify-catalog.js",
     "smoke:e2e": "node dist/scripts/smoke-e2e.js",
     "sync:plugin": "node dist/scripts/sync-plugin-mirror.js",
+    "release": "node dist/scripts/release.js",
     "prepack": "npm run build && npm run verify:plugin-bundle"
   },
   "files": [
