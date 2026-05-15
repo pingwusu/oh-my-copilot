@@ -14,8 +14,14 @@
         "repo": "TBD/oh-my-copilot",
         "subdirectory": "."
       },
-      "version": "0.1.0",
-      "tags": ["orchestration", "multi-agent", "ralph", "autopilot", "team"]
+      "version": "0.2.0",
+      "tags": [
+        "orchestration",
+        "multi-agent",
+        "ralph",
+        "autopilot",
+        "team"
+      ]
     }
   ]
 }
