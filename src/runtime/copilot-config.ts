@@ -19,11 +19,15 @@ export interface CopilotConfig {
   [key: string]: unknown;
 }
 
+import { parse as parseJsonc } from "jsonc-parser";
+
 export function readJsonOrDefault<T>(path: string, fallback: T): T {
   if (!existsSync(path)) return fallback;
   const raw = readFileSync(path, "utf8");
   if (!raw.trim()) return fallback;
-  return JSON.parse(raw) as T;
+  // Copilot's own config.json sometimes contains // comments; use jsonc-parser
+  // to be permissive.
+  return parseJsonc(raw) as T;
 }
 
 export function writeJson(path: string, data: unknown): void {
