@@ -28,6 +28,8 @@ const BANNED_TOKENS = [
   "ToolSearch",
   "<remember>",
   "<remember priority>",
+  // Claude-only Skill tool — Copilot uses /oh-my-copilot:<name> slash instead
+  'Skill("oh-my-copilot:',
 ];
 
 interface Finding {

@@ -13,8 +13,32 @@ import {
   formatChecks,
   runDoctor,
 } from "./commands/doctor.js";
+import { runLaunch } from "./commands/launch.js";
+import { runLoop } from "./commands/loop.js";
+import { runCancel, runMode, runNote } from "./commands/mode.js";
+import { formatSessions, listSessions } from "./commands/session.js";
 import { runSetup } from "./commands/setup.js";
+import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam } from "./commands/team.js";
+import { runUpdate } from "./commands/update.js";
+
+const MODE_COMMANDS = [
+  "ralph",
+  "autopilot",
+  "ultrawork",
+  "ultraqa",
+  "sciomc",
+  "plan",
+  "ralplan",
+  "ccg",
+  "learner",
+  "deep-interview",
+  "deep-dive",
+  "external-context",
+  "ai-slop-cleaner",
+  "visual-verdict",
+  "autoresearch",
+] as const;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(here, "..", "..");
@@ -112,19 +136,35 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   program
     .command("hud")
     .description("Print a single-line omcp status bar (for status-line configs)")
-    .action(() => {
+    .option("--watch", "re-render every 2 seconds (Ctrl+C to stop)")
+    .option("--interval <ms>", "watch interval in ms (default 2000)", (v) => Number(v))
+    .action((opts: { watch?: boolean; interval?: number }) => {
       const hudScript = resolve(packageRoot, "scripts", "omcp-hud.mjs");
-      const child = spawn(process.execPath, [hudScript], {
-        stdio: ["ignore", "inherit", "inherit"],
-        env: process.env,
-      });
-      child.on("close", (code) => {
-        process.exitCode = code ?? 0;
-      });
-      child.on("error", () => {
-        process.stdout.write("omcp · (status unavailable)\n");
-        process.exitCode = 0;
-      });
+      const renderOnce = (onDone?: () => void) => {
+        const child = spawn(process.execPath, [hudScript], {
+          stdio: ["ignore", "inherit", "inherit"],
+          env: process.env,
+        });
+        child.on("close", () => onDone?.());
+        child.on("error", () => {
+          process.stdout.write("omcp · (status unavailable)\n");
+          onDone?.();
+        });
+      };
+      if (opts.watch) {
+        const interval = opts.interval ?? 2000;
+        const tick = () => renderOnce();
+        tick();
+        const handle = setInterval(tick, interval);
+        process.on("SIGINT", () => {
+          clearInterval(handle);
+          process.exit(0);
+        });
+      } else {
+        renderOnce(() => {
+          process.exitCode = 0;
+        });
+      }
     });
 
   program
@@ -140,6 +180,113 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       );
       console.log(`  session: ${report.sessionId}`);
       console.log(`  logs:    ${report.logDir}`);
+    });
+
+  // Mode launchers: `omcp ralph "task"`, `omcp autopilot "task"`, etc.
+  for (const mode of MODE_COMMANDS) {
+    program
+      .command(`${mode} <task...>`)
+      .description(`Run /oh-my-copilot:${mode} non-interactively against Copilot`)
+      .option("--family <family>", "model family: claude | gpt | auto", "auto")
+      .option("--agent <name>", "use a specific omcp agent's recommended model")
+      .option("--silent", "suppress stats banner from Copilot")
+      .option("--max-continues <n>", "cap autopilot continuation count", (v) => Number(v))
+      .action(
+        (
+          taskParts: string[],
+          opts: {
+            family?: string;
+            agent?: string;
+            silent?: boolean;
+            maxContinues?: number;
+          },
+        ) => {
+          const code = runMode({
+            mode,
+            task: taskParts.join(" "),
+            family: opts.family as "claude" | "gpt" | "auto" | undefined,
+            agent: opts.agent,
+            agentsDir: resolve(packageRoot, "agents"),
+            silent: opts.silent,
+            maxContinues: opts.maxContinues,
+          });
+          process.exitCode = code;
+        },
+      );
+  }
+
+  program
+    .command("cancel")
+    .description("Write a cancel marker that omcp loops/skills check on each iteration")
+    .option("--reason <reason>", "free-form reason text")
+    .action((opts: { reason?: string }) => {
+      const report = runCancel(opts.reason);
+      console.log(`omcp cancel: wrote ${report.path}`);
+    });
+
+  program
+    .command("note <text...>")
+    .description("Append a priority note to .omcp/notepad.md")
+    .action((textParts: string[]) => {
+      const report = runNote(textParts.join(" "));
+      console.log(`omcp note: appended to ${report.path}`);
+    });
+
+  program
+    .command("loop <interval> <cmd...>")
+    .description("Re-invoke <cmd> every <interval> (e.g. 5m, 30s) until cancelled")
+    .option("--max <n>", "max iterations", (v) => Number(v))
+    .action(
+      async (
+        interval: string,
+        cmd: string[],
+        opts: { max?: number },
+      ) => {
+        const code = await runLoop({
+          interval,
+          cmd,
+          maxIterations: opts.max,
+        });
+        process.exitCode = code;
+      },
+    );
+
+  program
+    .command("status")
+    .description("Snapshot of active modes, ralph iteration, team workers, cancel state")
+    .action(() => {
+      const s = readStatus();
+      console.log(formatStatus(s));
+    });
+
+  program
+    .command("session [query]")
+    .description("List omcp sessions under .omcp/state/sessions (with optional grep)")
+    .action((query?: string) => {
+      const sessions = listSessions(query);
+      console.log(formatSessions(sessions));
+    });
+
+  program
+    .command("launch")
+    .description("Launch `copilot` with omcp's preferred defaults (--allow-all-tools)")
+    .option("--autopilot", "pass --autopilot to copilot")
+    .allowUnknownOption()
+    .action((opts: { autopilot?: boolean }, command: Command) => {
+      const code = runLaunch({
+        args: command.args ?? [],
+        autopilot: opts.autopilot,
+      });
+      process.exitCode = code;
+    });
+
+  program
+    .command("update")
+    .description("npm install -g oh-my-copilot@latest then refresh the install")
+    .action(() => {
+      const report = runUpdate();
+      process.exitCode =
+        report.npmExitCode === 0 && report.setupExitCode === 0 ? 0 : 1;
     });
 
   await program.parseAsync(argv);

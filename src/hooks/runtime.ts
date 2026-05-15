@@ -278,6 +278,16 @@ export async function loadHooks(opts: LoadOptions = {}): Promise<HookRegistry> {
   const cwd = opts.cwd ?? process.cwd();
   const timeoutMs = opts.timeoutMs ?? HOOK_TIMEOUT_MS;
 
+  // Kill switches: DISABLE_OMCP=1 disables all hooks. OMCP_SKIP_HOOKS=foo,bar
+  // skips hooks whose name (file basename) matches an entry in the comma-list.
+  if (env.DISABLE_OMCP === "1" || env.OMCP_DISABLE === "1") {
+    return createRegistry();
+  }
+  const skipList = (env.OMCP_SKIP_HOOKS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
   const dirs = [
     opts.pluginHooksDir ?? defaultPluginHooksDir(env),
     opts.repoHooksDir ?? defaultRepoHooksDir(cwd),
@@ -287,6 +297,10 @@ export async function loadHooks(opts: LoadOptions = {}): Promise<HookRegistry> {
   for (const dir of dirs) {
     const files = listHookFiles(dir);
     for (const file of files) {
+      const basename = (file.split(/[\\/]/).pop() ?? "").replace(/\.[^.]+$/, "");
+      if (skipList.includes(basename)) {
+        continue;
+      }
       const ext = file.split(".").pop()?.toLowerCase() ?? "";
       try {
         if (ext === "sh" || ext === "ps1") {
