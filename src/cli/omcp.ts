@@ -426,9 +426,11 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .command("mcp-serve <server>")
     .description("Stdio entrypoint for an omcp MCP server")
     .action((server: string) => {
-      const resolved = resolveMcpServer(server, packageRoot);
-      if (!resolved) {
-        console.error(`omcp mcp-serve: unknown server '${server}'`);
+      let resolved;
+      try {
+        resolved = resolveMcpServer(server, packageRoot);
+      } catch (err) {
+        console.error(`omcp mcp-serve: ${(err as Error).message}`);
         process.exitCode = 2;
         return;
       }

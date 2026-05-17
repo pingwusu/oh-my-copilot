@@ -23,6 +23,7 @@ const DIR_SOURCES = [
   "prompts",
   "templates",
   "hooks",
+  "scripts",
   "dist",
   ".claude-plugin",
 ];

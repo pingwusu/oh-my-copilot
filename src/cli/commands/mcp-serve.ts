@@ -1,11 +1,9 @@
 // `omcp mcp-serve <server>` — convenience launcher for omcp's bundled MCP
-// servers. Resolves the requested name to the right `dist/mcp/<name>.js` file
-// and exec-replaces the current process so the parent MCP client sees a clean
-// stdio chain (no extra fork sitting between).
+// servers. Resolves the requested name to the right `dist/mcp/<name>.js` file.
+// The CLI dispatcher in omcp.ts spawns the resolved path via spawn+stdio:inherit.
 //
 // Only names with a real artifact under `dist/mcp/` are registered.
 
-import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -55,14 +53,7 @@ export function resolveMcpServer(
   return { name, path };
 }
 
-// Exec the resolved server, replacing this process. We use spawn+stdio:inherit
-// rather than Node's child_process.exec because Node doesn't expose POSIX
-// execve; the parent omcp process exits as soon as the server is up.
-export function runMcpServer(name: string, packageRoot: string): number {
-  const resolved = resolveMcpServer(name, packageRoot);
-  const r = spawnSync(process.execPath, [resolved.path], {
-    stdio: "inherit",
-    env: process.env,
-  });
-  return typeof r.status === "number" ? r.status : 1;
-}
+// (P3 cleanup: previously a thin spawnSync wrapper named `runMcpServer` lived
+// here, but it collided with `src/mcp/server-runtime.ts`'s `runMcpServer` and
+// was never imported. The CLI dispatcher in `omcp.ts` invokes `spawn` directly
+// after `resolveMcpServer`, so the duplicate is removed.)
