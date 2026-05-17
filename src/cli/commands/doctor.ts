@@ -3,6 +3,12 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import {
+  type CopilotConfig,
+  hasOmcpHookWiring,
+  hasOmcpStatusLine,
+  readJsonOrDefault,
+} from "../../runtime/copilot-config.js";
 import { resolvePaths } from "../../runtime/paths.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
@@ -88,6 +94,48 @@ export function runDoctor(): CheckResult[] {
     level: existsSync(agentsDir) ? "ok" : "warn",
     detail: existsSync(agentsDir) ? agentsDir : "agents/ not yet mirrored",
   });
+
+  // 7. Copilot CLI hook wiring (Case A: settings-driven hooks).
+  // Reads ~/.copilot/config.json and confirms omcp-managed entries are present
+  // in `hooks`. Reports `ok` when wired, `warn` otherwise — never `fail`,
+  // because hooks are an opt-in convenience layer.
+  if (existsSync(paths.copilotConfig)) {
+    try {
+      const cfg = readJsonOrDefault<CopilotConfig>(paths.copilotConfig, {});
+      const hookWired = hasOmcpHookWiring(
+        cfg.hooks as Parameters<typeof hasOmcpHookWiring>[0],
+      );
+      const statusWired = hasOmcpStatusLine(
+        cfg.statusLine as Parameters<typeof hasOmcpStatusLine>[0],
+      );
+      checks.push({
+        name: "hook wiring",
+        level: hookWired ? "ok" : "warn",
+        detail: hookWired
+          ? "omcp hook entries present in config.json"
+          : "not wired — run `omcp setup` (see docs/architecture/hooks-wiring.md)",
+      });
+      checks.push({
+        name: "statusLine wiring",
+        level: statusWired ? "ok" : "warn",
+        detail: statusWired
+          ? "omcp hud configured as statusLine.command"
+          : "not wired — run `omcp setup` to enable `omcp hud` as statusLine",
+      });
+    } catch (err) {
+      checks.push({
+        name: "hook wiring",
+        level: "warn",
+        detail: `unable to parse config.json: ${(err as Error).message}`,
+      });
+    }
+  } else {
+    checks.push({
+      name: "hook wiring",
+      level: "warn",
+      detail: "config.json not present — run `omcp setup` to wire hooks",
+    });
+  }
 
   return checks;
 }

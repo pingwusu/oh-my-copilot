@@ -64,12 +64,22 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .action(async (opts: { force?: boolean; dryRun?: boolean }) => {
       const report = await runSetup({ ...opts, packageRoot });
       console.log(`omcp setup ${report.dryRun ? "(dry-run) " : ""}complete`);
-      console.log(`  plugin     -> ${report.pluginInstalledAt}`);
+      console.log(`  plugin      -> ${report.pluginInstalledAt}`);
       console.log(`  marketplace -> ${report.marketplaceAt}`);
       console.log(`  config.json updated: ${report.configUpdated}`);
       console.log(`  mcp-config.json updated: ${report.mcpUpdated}`);
+      console.log(`  hooks auto-wired: ${report.hooksWired}`);
+      console.log(`  statusLine auto-wired: ${report.statusLineWired}`);
       console.log("");
-      console.log("Next: launch `copilot` and try `/oh-my-copilot:autopilot ...`");
+      if (report.hooksWired) {
+        console.log(
+          "Next: hooks auto-wired - launch `copilot` and try `/oh-my-copilot:autopilot ...`",
+        );
+      } else {
+        console.log(
+          "Next: Hooks wiring requires manual step (see docs/architecture/hooks-wiring.md)",
+        );
+      }
     });
 
   program

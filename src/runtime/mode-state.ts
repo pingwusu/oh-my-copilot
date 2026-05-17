@@ -69,16 +69,34 @@ export const MODE_CONFIGS: Record<ModeName, ModeConfig> = {
   ralplan: { mutuallyExclusive: false },
 };
 
-function stateRoot(): string {
-  return join(process.cwd(), ".omcp", "state");
+export function resolveSessionRoot(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const sid = env.COPILOT_SESSION_ID ?? env.OMCP_SESSION_ID;
+  if (typeof sid === "string" && sid.length > 0) return sid;
+  return "default";
 }
 
-function modeFile(mode: ModeName): string {
-  return join(stateRoot(), `${mode}-state.json`);
+function stateRoot(sessionId?: string): string {
+  if (sessionId === "") {
+    return join(process.cwd(), ".omcp", "state");
+  }
+  const sid = sessionId ?? resolveSessionRoot();
+  if (sid === "default") {
+    return join(process.cwd(), ".omcp", "state");
+  }
+  return join(process.cwd(), ".omcp", "state", "sessions", sid);
 }
 
-export function readModeState<T extends BaseModeState>(mode: ModeName): T | null {
-  const f = modeFile(mode);
+function modeFile(mode: ModeName, sessionId?: string): string {
+  return join(stateRoot(sessionId), `${mode}-state.json`);
+}
+
+export function readModeState<T extends BaseModeState>(
+  mode: ModeName,
+  sessionId?: string,
+): T | null {
+  const f = modeFile(mode, sessionId);
   if (!existsSync(f)) return null;
   try {
     return JSON.parse(readFileSync(f, "utf8")) as T;
@@ -90,45 +108,49 @@ export function readModeState<T extends BaseModeState>(mode: ModeName): T | null
 export function writeModeState<T extends BaseModeState>(
   mode: ModeName,
   state: T,
+  sessionId?: string,
 ): void {
-  const f = modeFile(mode);
-  mkdirSync(stateRoot(), { recursive: true });
+  const f = modeFile(mode, sessionId);
+  mkdirSync(stateRoot(sessionId), { recursive: true });
   writeFileSync(f, JSON.stringify(state, null, 2));
 }
 
-export function clearModeState(mode: ModeName): void {
-  const f = modeFile(mode);
+export function clearModeState(mode: ModeName, sessionId?: string): void {
+  const f = modeFile(mode, sessionId);
   if (existsSync(f)) rmSync(f);
 }
 
-export function listActiveModes(): ModeName[] {
-  const root = stateRoot();
+export function listActiveModes(sessionId?: string): ModeName[] {
+  const root = stateRoot(sessionId);
   if (!existsSync(root)) return [];
   const out: ModeName[] = [];
   for (const mode of Object.keys(MODE_CONFIGS) as ModeName[]) {
-    const s = readModeState<BaseModeState>(mode);
+    const s = readModeState<BaseModeState>(mode, sessionId);
     if (s?.active) out.push(mode);
   }
   return out;
 }
 
-export function canStartMode(target: ModeName): {
+export function canStartMode(
+  target: ModeName,
+  sessionId?: string,
+): {
   ok: boolean;
   conflict?: ModeName;
 } {
   if (!MODE_CONFIGS[target].mutuallyExclusive) return { ok: true };
-  const active = listActiveModes().find(
+  const active = listActiveModes(sessionId).find(
     (m) => MODE_CONFIGS[m].mutuallyExclusive && m !== target,
   );
   if (active) return { ok: false, conflict: active };
   return { ok: true };
 }
 
-export function isCancelled(): boolean {
-  return existsSync(join(stateRoot(), "cancel.json"));
+export function isCancelled(sessionId?: string): boolean {
+  return existsSync(join(stateRoot(sessionId), "cancel.json"));
 }
 
-export function clearCancel(): void {
-  const f = join(stateRoot(), "cancel.json");
+export function clearCancel(sessionId?: string): void {
+  const f = join(stateRoot(sessionId), "cancel.json");
   if (existsSync(f)) rmSync(f);
 }

@@ -48,4 +48,60 @@ describe("doctor checks", () => {
       ]),
     ).toBe(2);
   });
+
+  it("warns about hook wiring when config.json is missing", () => {
+    const checks = runDoctor();
+    const hookCheck = checks.find((c) => c.name === "hook wiring");
+    expect(hookCheck).toBeDefined();
+    expect(hookCheck?.level).toBe("warn");
+  });
+
+  it("reports ok hook wiring when config.json has omcp __omcp entries", () => {
+    const config = {
+      installedPlugins: [],
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "*",
+            hooks: [
+              {
+                type: "command",
+                command: "omcp hook fire PreToolUse --json",
+                __omcp: true,
+              },
+            ],
+          },
+        ],
+      },
+      statusLine: {
+        type: "command",
+        command: "omcp hud",
+        __omcp: true,
+      },
+    };
+    writeFileSync(join(tmp, "config.json"), JSON.stringify(config, null, 2));
+    const checks = runDoctor();
+    expect(checks.find((c) => c.name === "hook wiring")?.level).toBe("ok");
+    expect(checks.find((c) => c.name === "statusLine wiring")?.level).toBe("ok");
+  });
+
+  it("warns about hook wiring when config.json has no __omcp markers", () => {
+    const config = {
+      installedPlugins: [],
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: "*",
+            hooks: [
+              { type: "command", command: "user-only" },
+            ],
+          },
+        ],
+      },
+    };
+    writeFileSync(join(tmp, "config.json"), JSON.stringify(config, null, 2));
+    const checks = runDoctor();
+    expect(checks.find((c) => c.name === "hook wiring")?.level).toBe("warn");
+    expect(checks.find((c) => c.name === "statusLine wiring")?.level).toBe("warn");
+  });
 });

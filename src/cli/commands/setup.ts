@@ -12,7 +12,10 @@
 import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  applyOmcpRuntimeWiring,
   type CopilotConfig,
+  hasOmcpHookWiring,
+  hasOmcpStatusLine,
   type McpConfig,
   mergeMcpServers,
   readJsonOrDefault,
@@ -44,6 +47,8 @@ export interface SetupReport {
   marketplaceAt: string;
   configUpdated: boolean;
   mcpUpdated: boolean;
+  hooksWired: boolean;
+  statusLineWired: boolean;
   dryRun: boolean;
 }
 
@@ -94,8 +99,15 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
   if (!dryRun) writeJson(paths.omcpMarketplaceFile, marketplace);
 
   const config = readJsonOrDefault<CopilotConfig>(paths.copilotConfig, {});
-  const nextConfig = upsertOmcpPlugin(config, version, paths.omcpPluginDir);
+  const withPlugin = upsertOmcpPlugin(config, version, paths.omcpPluginDir);
+  const nextConfig = applyOmcpRuntimeWiring(withPlugin);
   if (!dryRun) writeJson(paths.copilotConfig, nextConfig);
+  const hooksWired = hasOmcpHookWiring(
+    (nextConfig.hooks as Parameters<typeof hasOmcpHookWiring>[0]) ?? undefined,
+  );
+  const statusLineWired = hasOmcpStatusLine(
+    (nextConfig.statusLine as Parameters<typeof hasOmcpStatusLine>[0]) ?? undefined,
+  );
 
   let mcpUpdated = false;
   const pluginMcpPath = join(packageRoot, ".mcp.json");
@@ -115,6 +127,8 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
     marketplaceAt: paths.omcpMarketplaceFile,
     configUpdated: true,
     mcpUpdated,
+    hooksWired,
+    statusLineWired,
     dryRun: Boolean(dryRun),
   };
 }

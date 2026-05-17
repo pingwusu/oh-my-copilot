@@ -3,7 +3,7 @@
     "omcp-state": {
       "command": "node",
       "args": ["${PLUGIN_ROOT}/dist/mcp/state-server-main.js"],
-      "description": "State, notepad, project-memory, and trace persistence for omcp sessions"
+      "description": "Per-session state read/write/clear/list_active/get_status"
     },
     "omcp-notepad": {
       "command": "node",
@@ -19,6 +19,21 @@
       "command": "node",
       "args": ["${PLUGIN_ROOT}/dist/mcp/project-memory-server.js"],
       "description": "Long-lived project memory: notes, directives, structured data"
+    },
+    "omcp-loop": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/loop-server.js"],
+      "description": "Recurring task scheduler (loop_schedule/list_pending/check_due/cancel/mark_fired). Companion watcher: scripts/omcp-loop-watcher.mjs"
+    },
+    "omcp-code-intel": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/code-intel-server.js"],
+      "description": "Code intelligence: lsp_diagnostics(_directory), lsp_document/workspace_symbols, lsp_hover, lsp_find_references, lsp_servers, ast_grep_search, ast_grep_replace. Wraps tsc, ast-grep, grep."
+    },
+    "omcp-hermes": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/hermes-server.js"],
+      "description": "Session-coordination dispatcher (hermes_start_session/send_prompt/read_status/read_tail/list_artifacts/kill_session/list_sessions). tmux-first, detached fallback."
     }
   }
 }

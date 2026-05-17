@@ -87,3 +87,195 @@ export function mergeMcpServers(
   }
   return next;
 }
+
+// ---------------------------------------------------------------------------
+// Copilot CLI `hooks` and `statusLine` wiring
+// ---------------------------------------------------------------------------
+//
+// Copilot CLI 1.0.32+ reads inline `hooks` and `statusLine` fields from
+// ~/.copilot/config.json. The `hooks` value uses the same shape as
+// `.github/hooks/*.json` and Claude Code's hooks config:
+//
+//   {
+//     "<EventName>": [
+//       {
+//         "matcher": "*",                 // optional tool/glob matcher
+//         "hooks": [
+//           {
+//             "type": "command",
+//             "command": "<shell command>",
+//             "timeout": <seconds>         // optional
+//           }
+//         ]
+//       }
+//     ]
+//   }
+//
+// We dispatch each Copilot hook event to `omcp hook fire <event> --json`, which
+// reads the JSON payload Copilot pipes on stdin and invokes every registered
+// omcp hook (plugin-cache + repo-local). The marker key `__omcp` lets us
+// reliably identify and refresh omcp-managed hook entries without disturbing
+// any unrelated user-authored hook entries that share the same event.
+
+/** Hook events omcp wires by default. Aligned with HookEvent in hook-types. */
+export const OMCP_HOOK_EVENTS = [
+  "PreToolUse",
+  "PostToolUse",
+  "PreSubmit",
+  "PostSubmit",
+  "SessionStart",
+  "PreEnd",
+] as const;
+
+export type CopilotHookEventName = (typeof OMCP_HOOK_EVENTS)[number] | string;
+
+export interface CopilotHookCommand {
+  type: "command";
+  command: string;
+  timeout?: number;
+  /** Internal marker — set on entries omcp manages so refreshes are idempotent. */
+  __omcp?: boolean;
+}
+
+export interface CopilotHookMatcher {
+  matcher?: string;
+  hooks: CopilotHookCommand[];
+}
+
+export type CopilotHooksMap = Record<CopilotHookEventName, CopilotHookMatcher[]>;
+
+export interface CopilotStatusLine {
+  type: "command";
+  command: string;
+  padding?: number;
+  __omcp?: boolean;
+}
+
+export interface MergeHookOptions {
+  /** Override the executable used to run `omcp hook fire ...`. Defaults to `omcp`. */
+  omcpBin?: string;
+  /** Per-hook timeout in seconds. Defaults to 5s. */
+  timeoutSec?: number;
+  /** Override the list of events to wire. Defaults to OMCP_HOOK_EVENTS. */
+  events?: readonly CopilotHookEventName[];
+}
+
+function omcpHookCommand(event: string, omcpBin: string): string {
+  // Use shell-safe quoting; both POSIX shells and pwsh accept single-token
+  // command names. We don't quote the event since it's a known identifier.
+  return `${omcpBin} hook fire ${event} --json`;
+}
+
+/**
+ * Merge omcp's hook entries into a Copilot `hooks` map without disturbing
+ * user-authored entries for the same events. Existing omcp-managed entries
+ * (marked with `__omcp: true`) are replaced; non-omcp entries are preserved.
+ */
+export function mergeCopilotHooks(
+  existing: CopilotHooksMap | undefined,
+  opts: MergeHookOptions = {},
+): CopilotHooksMap {
+  const omcpBin = opts.omcpBin ?? "omcp";
+  const timeout = opts.timeoutSec ?? 5;
+  const events = opts.events ?? OMCP_HOOK_EVENTS;
+  const next: CopilotHooksMap = {};
+
+  // Carry over every existing event, stripping omcp-managed matcher entries
+  // so we can rewrite them cleanly.
+  for (const [event, matchers] of Object.entries(existing ?? {})) {
+    const filteredMatchers: CopilotHookMatcher[] = [];
+    for (const matcher of matchers ?? []) {
+      const remaining = (matcher.hooks ?? []).filter((h) => h.__omcp !== true);
+      if (remaining.length === 0) continue;
+      filteredMatchers.push({ ...matcher, hooks: remaining });
+    }
+    if (filteredMatchers.length > 0) {
+      next[event] = filteredMatchers;
+    }
+  }
+
+  for (const event of events) {
+    const omcpMatcher: CopilotHookMatcher = {
+      matcher: "*",
+      hooks: [
+        {
+          type: "command",
+          command: omcpHookCommand(event, omcpBin),
+          timeout,
+          __omcp: true,
+        },
+      ],
+    };
+    next[event] = [...(next[event] ?? []), omcpMatcher];
+  }
+
+  return next;
+}
+
+export interface MergeStatusLineOptions {
+  /** Override the executable used to render the status line. Defaults to `omcp`. */
+  omcpBin?: string;
+  /** Padding (spaces) Copilot adds to each status-line render. */
+  padding?: number;
+}
+
+/**
+ * Build (or refresh) the omcp status-line entry. If the user already has a
+ * non-omcp `statusLine` configured we leave it untouched and return it as-is —
+ * the user's customization wins. Only previously omcp-managed entries are
+ * rewritten.
+ */
+export function mergeCopilotStatusLine(
+  existing: CopilotStatusLine | undefined,
+  opts: MergeStatusLineOptions = {},
+): CopilotStatusLine {
+  const omcpBin = opts.omcpBin ?? "omcp";
+  // If user has a custom (non-omcp) statusLine, preserve it.
+  if (existing && existing.__omcp !== true) {
+    return existing;
+  }
+  const next: CopilotStatusLine = {
+    type: "command",
+    command: `${omcpBin} hud`,
+    __omcp: true,
+  };
+  if (opts.padding !== undefined) next.padding = opts.padding;
+  return next;
+}
+
+/**
+ * Apply hooks + statusLine wiring on top of an existing CopilotConfig in a
+ * single pass. Returns a new config object; never mutates `config`.
+ */
+export function applyOmcpRuntimeWiring(
+  config: CopilotConfig,
+  opts: MergeHookOptions & MergeStatusLineOptions = {},
+): CopilotConfig {
+  const existingHooks = (config.hooks as CopilotHooksMap | undefined) ?? undefined;
+  const existingStatus = (config.statusLine as CopilotStatusLine | undefined) ?? undefined;
+  const nextHooks = mergeCopilotHooks(existingHooks, opts);
+  const nextStatus = mergeCopilotStatusLine(existingStatus, opts);
+  return {
+    ...config,
+    hooks: nextHooks,
+    statusLine: nextStatus,
+  };
+}
+
+/** True when at least one omcp-managed hook entry is present in `hooks`. */
+export function hasOmcpHookWiring(hooks: CopilotHooksMap | undefined): boolean {
+  if (!hooks) return false;
+  for (const matchers of Object.values(hooks)) {
+    for (const matcher of matchers ?? []) {
+      for (const h of matcher.hooks ?? []) {
+        if (h.__omcp === true) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** True when the statusLine entry is omcp-managed. */
+export function hasOmcpStatusLine(status: CopilotStatusLine | undefined): boolean {
+  return Boolean(status && status.__omcp === true);
+}
