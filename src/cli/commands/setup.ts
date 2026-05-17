@@ -24,6 +24,9 @@ import {
 } from "../../runtime/copilot-config.js";
 import { resolvePaths } from "../../runtime/paths.js";
 
+// `force` is accepted for forward-compat with a future "fail if already
+// installed" mode; today setup is always a refresh.
+
 const SOURCE_ROOTS = [
   "agents",
   "skills",
@@ -54,19 +57,16 @@ export interface SetupReport {
 
 export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
   const paths = resolvePaths();
-  const { packageRoot, force, dryRun } = opts;
+  const { packageRoot, dryRun } = opts;
 
-  const pluginManifest = JSON.parse(
+  // Validate the plugin manifest parses (we read but do not consume fields here).
+  JSON.parse(
     readFileSync(join(packageRoot, ".claude-plugin", "plugin.json"), "utf8"),
-  ) as { version: string; name: string };
+  );
   const pkg = JSON.parse(
     readFileSync(join(packageRoot, "package.json"), "utf8"),
   ) as { version: string };
   const version = pkg.version;
-
-  if (existsSync(paths.omcpPluginDir) && !force) {
-    // Treat as refresh — overwrite contents; do not error.
-  }
 
   if (!dryRun) {
     mkdirSync(paths.omcpPluginDir, { recursive: true });
@@ -118,9 +118,6 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
     if (!dryRun) writeJson(paths.copilotMcpConfig, merged);
     mcpUpdated = true;
   }
-
-  // pluginManifest is read to validate it exists/parses; details unused here
-  void pluginManifest;
 
   return {
     pluginInstalledAt: paths.omcpPluginDir,

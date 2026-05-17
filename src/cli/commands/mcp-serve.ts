@@ -52,8 +52,3 @@ export function resolveMcpServer(
   }
   return { name, path };
 }
-
-// (P3 cleanup: previously a thin spawnSync wrapper named `runMcpServer` lived
-// here, but it collided with `src/mcp/server-runtime.ts`'s `runMcpServer` and
-// was never imported. The CLI dispatcher in `omcp.ts` invokes `spawn` directly
-// after `resolveMcpServer`, so the duplicate is removed.)
