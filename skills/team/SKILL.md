@@ -321,14 +321,11 @@ For tasks with dependencies, update after creation:
 
 Dispatch N teammates through `/fleet`, binding each to the team slug with a worker name (`worker-1`, `worker-2`, ...). Each teammate gets the team worker preamble (see below) plus their specific assignment.
 
-```json
-{
-  "subagent_type": "oh-my-copilot:executor",
-  "team_name": "fix-ts-errors",
-  "name": "worker-1",
-  "prompt": "<worker-preamble + assigned tasks>"
-}
 ```
+/fleet oh-my-copilot:executor --team_name=fix-ts-errors --name=worker-1 --prompt="<worker-preamble + assigned tasks>"
+```
+
+Equivalently, when omcp's CLI wrapper is on PATH: `omcp team 4:executor "fix-ts-errors: <task>"` — the wrapper spawns N `/fleet` workers automatically.
 
 **Expected response:**
 ```json

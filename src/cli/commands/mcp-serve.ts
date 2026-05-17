@@ -18,8 +18,8 @@ const SERVER_FILES: Record<string, string> = {
   trace: "trace-server.js",
   "project-memory": "project-memory-server.js",
   loop: "loop-server.js",
-  // code-intel and hermes aren't currently in dist/mcp/ for this repo state.
-  // They get added automatically below once they exist on disk.
+  "code-intel": "code-intel-server.js",
+  hermes: "hermes-server.js",
 };
 
 export interface ResolvedServer {

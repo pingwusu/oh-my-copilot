@@ -25,7 +25,7 @@ import {
 } from "../../runtime/copilot-config.js";
 import { resolvePaths } from "../../runtime/paths.js";
 
-/** MCP server keys installed by `omcp setup` (from repo .mcp.json). */
+/** MCP server keys installed by `omcp setup` (from repo .mcp.json — 7 servers). */
 export const OMCP_MCP_SERVER_KEYS = [
   "omcp-state",
   "omcp-notepad",
@@ -33,6 +33,7 @@ export const OMCP_MCP_SERVER_KEYS = [
   "omcp-project-memory",
   "omcp-loop",
   "omcp-code-intel",
+  "omcp-hermes",
 ] as const;
 
 export interface UninstallOptions {

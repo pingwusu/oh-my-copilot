@@ -70,7 +70,7 @@ fi
 
 ## Step 2.4: Set Default Execution Mode
 
-Use the AskUserQuestion tool to prompt the user:
+Use the ask the user directly (one question at a time) tool to prompt the user:
 
 **Question:** "Which parallel execution mode should be your default when you say 'fast' or 'parallel'?"
 
@@ -114,7 +114,7 @@ fi
 
 If `OMCP_CLI_INSTALLED` is `"true"`, skip the rest of this step.
 
-If `OMCP_CLI_INSTALLED` is `"false"`, use AskUserQuestion:
+If `OMCP_CLI_INSTALLED` is `"false"`, use ask the user directly (one question at a time):
 
 **Question:** "Would you like to install the OMCP CLI globally for standalone helper commands? (`omcp`, `omcp hud`, `omcp teleport`)"
 
@@ -175,7 +175,7 @@ fi
 
 If **neither** beads nor beads-rust is detected, skip this step (default to built-in).
 
-If beads or beads-rust is detected, use AskUserQuestion:
+If beads or beads-rust is detected, use ask the user directly (one question at a time):
 
 **Question:** "Which task management tool should I use for tracking work?"
 

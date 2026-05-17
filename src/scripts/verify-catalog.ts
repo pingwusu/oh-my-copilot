@@ -30,6 +30,8 @@ const BANNED_TOKENS = [
   "<remember priority>",
   // Claude-only Skill tool — Copilot uses /oh-my-copilot:<name> slash instead
   'Skill("oh-my-copilot:',
+  // Claude-only subagent dispatch envelope — Copilot uses `/fleet <agent>` slash
+  '"subagent_type":',
 ];
 
 interface Finding {
@@ -146,6 +148,37 @@ function collectSkills(): { file: string; name: string }[] {
   return out;
 }
 
+/** Walk every .md file under skills/ (including subfiles) for banned-token scan. */
+function collectAllSkillMarkdowns(): string[] {
+  if (!statSyncSafe(SKILLS_DIR)) return [];
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      const st = statSyncSafe(p);
+      if (!st) continue;
+      if (st.isDirectory()) {
+        walk(p);
+        continue;
+      }
+      if (entry.toLowerCase().endsWith(".md")) out.push(p);
+    }
+  };
+  walk(SKILLS_DIR);
+  return out;
+}
+
+function scanSubfileTokens(file: string): Finding[] {
+  const text = readFileSync(file, "utf8");
+  const findings: Finding[] = [];
+  for (const token of BANNED_TOKENS) {
+    if (text.includes(token)) {
+      findings.push({ file, issue: `subfile contains banned token: ${token}` });
+    }
+  }
+  return findings;
+}
+
 function statSyncSafe(p: string): ReturnType<typeof statSync> | null {
   try {
     return statSync(p);
@@ -158,6 +191,12 @@ export function runVerify(): Finding[] {
   const findings: Finding[] = [];
   for (const a of collectAgents()) findings.push(...checkFile(a.file, a.name));
   for (const s of collectSkills()) findings.push(...checkFile(s.file, s.name));
+  // Skill subfiles: only token-scan, not frontmatter check.
+  const skillTopFiles = new Set(collectSkills().map((s) => s.file));
+  for (const path of collectAllSkillMarkdowns()) {
+    if (skillTopFiles.has(path)) continue;
+    findings.push(...scanSubfileTokens(path));
+  }
   return findings;
 }
 

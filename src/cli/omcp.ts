@@ -8,18 +8,50 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runFireCli } from "../hooks/runtime.js";
 import { runAsk } from "./commands/ask.js";
+import { formatCleanupReport, runCleanup } from "./commands/cleanup.js";
 import {
   exitCodeFor,
   formatChecks,
   runDoctor,
 } from "./commands/doctor.js";
+import { runExec } from "./commands/exec.js";
+import { formatInfo, readInfo } from "./commands/info.js";
 import { runLaunch } from "./commands/launch.js";
+import { formatCatalog, listAgents, listSkills } from "./commands/list.js";
 import { runLoop } from "./commands/loop.js";
+import {
+  startWatcher,
+  statusWatcher,
+  stopWatcher,
+} from "./commands/loop-watcher.js";
+import { resolveMcpServer } from "./commands/mcp-serve.js";
+import { formatBoard, loadMissions } from "./commands/mission-board.js";
 import { runCancel, runMode, runNote } from "./commands/mode.js";
+import {
+  clearReasoning,
+  readReasoning,
+  writeReasoning,
+  type ReasoningLevel,
+} from "./commands/reasoning.js";
 import { formatSessions, listSessions } from "./commands/session.js";
 import { runSetup } from "./commands/setup.js";
+import {
+  clearAllState,
+  clearState,
+  formatStateList,
+  listStateFiles,
+  readState,
+  writeState,
+} from "./commands/state.js";
 import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam } from "./commands/team.js";
+import {
+  formatTeleportList,
+  listTeleports,
+  removeTeleport,
+  runTeleport,
+} from "./commands/teleport.js";
+import { formatUninstallReport, runUninstall } from "./commands/uninstall.js";
 import { runUpdate } from "./commands/update.js";
 
 const MODE_COMMANDS = [
@@ -297,6 +329,187 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       const report = runUpdate();
       process.exitCode =
         report.npmExitCode === 0 && report.setupExitCode === 0 ? 0 : 1;
+    });
+
+  program
+    .command("info")
+    .description("Diagnostic dump of catalog, MCP servers, env vars, paths")
+    .action(() => {
+      console.log(formatInfo(readInfo(packageRoot)));
+    });
+
+  program
+    .command("list [type]")
+    .description("List agents / skills / all (default: all)")
+    .action((type?: string) => {
+      const kind = (type ?? "all").toLowerCase() as "agents" | "skills" | "all";
+      if (kind === "agents") {
+        console.log(formatCatalog(listAgents(packageRoot), "agents"));
+      } else if (kind === "skills") {
+        console.log(formatCatalog(listSkills(packageRoot), "skills"));
+      } else {
+        console.log(
+          formatCatalog(
+            [...listAgents(packageRoot), ...listSkills(packageRoot)],
+            "all",
+          ),
+        );
+      }
+    });
+
+  program
+    .command("mission-board")
+    .description("Render the .omcp/missions/ board view (sorted by status + priority)")
+    .action(() => {
+      console.log(formatBoard(loadMissions()));
+    });
+
+  program
+    .command("reasoning [level]")
+    .description("Get/set default reasoning effort (low|medium|high|xhigh)")
+    .option("--clear", "remove the saved reasoning level")
+    .action((level: string | undefined, opts: { clear?: boolean }) => {
+      if (opts.clear) {
+        const r = clearReasoning();
+        console.log(`omcp reasoning: cleared (${r.cleared ? "yes" : "no-op"})`);
+        return;
+      }
+      if (!level) {
+        const cur = readReasoning();
+        console.log(`omcp reasoning: ${cur ?? "(unset — defaults apply)"}`);
+        return;
+      }
+      const r = writeReasoning(level as ReasoningLevel);
+      console.log(`omcp reasoning: set to ${level} (${r.path})`);
+    });
+
+  program
+    .command("state <action> [args...]")
+    .description("State CLI: list | read <mode> | write <mode> <json> | clear <mode> | clear-all")
+    .action((action: string, args: string[]) => {
+      switch (action) {
+        case "list":
+          console.log(formatStateList(listStateFiles()));
+          return;
+        case "read": {
+          if (!args[0]) { console.error("omcp state read <mode>"); process.exitCode = 2; return; }
+          const s = readState(args[0]);
+          console.log(s === null ? "null" : JSON.stringify(s, null, 2));
+          return;
+        }
+        case "write": {
+          const [mode, json] = args;
+          if (!mode || !json) { console.error("omcp state write <mode> <json>"); process.exitCode = 2; return; }
+          let body: unknown;
+          try { body = JSON.parse(json); }
+          catch (err) { console.error(`omcp state write: invalid JSON (${(err as Error).message})`); process.exitCode = 2; return; }
+          console.log(`omcp state write: ${writeState(mode, body)}`);
+          return;
+        }
+        case "clear": {
+          if (!args[0]) { console.error("omcp state clear <mode>"); process.exitCode = 2; return; }
+          console.log(`omcp state clear: ${clearState(args[0]) ? "yes" : "no-op"}`);
+          return;
+        }
+        case "clear-all": {
+          const r = clearAllState();
+          console.log(`omcp state clear-all: removed ${r.removed.length} file(s)`);
+          return;
+        }
+        default:
+          console.error(`omcp state: unknown action '${action}' (list|read|write|clear|clear-all)`);
+          process.exitCode = 2;
+      }
+    });
+
+  program
+    .command("mcp-serve <server>")
+    .description("Stdio entrypoint for an omcp MCP server")
+    .action((server: string) => {
+      const resolved = resolveMcpServer(server, packageRoot);
+      if (!resolved) {
+        console.error(`omcp mcp-serve: unknown server '${server}'`);
+        process.exitCode = 2;
+        return;
+      }
+      const child = spawn(process.execPath, [resolved.path], { stdio: "inherit", env: process.env });
+      child.on("close", (code) => { process.exitCode = code ?? 0; });
+    });
+
+  program
+    .command("teleport <issueRef>")
+    .description("Create a git worktree for an issue under ~/Workspace/omcp-worktrees/")
+    .option("--list", "list existing teleport worktrees")
+    .option("--remove <slug>", "remove a teleport worktree by slug")
+    .option("--no-tmux", "skip tmux launch")
+    .action((issueRef: string, opts: { list?: boolean; remove?: string; tmux?: boolean }) => {
+      if (opts.list) { console.log(formatTeleportList(listTeleports())); return; }
+      if (opts.remove) {
+        const r = removeTeleport(opts.remove);
+        console.log(r.ok
+          ? `omcp teleport: removed ${opts.remove} (${r.path})`
+          : `omcp teleport: remove failed — ${r.error}`);
+        process.exitCode = r.ok ? 0 : 1;
+        return;
+      }
+      const result = runTeleport(issueRef, { noTmux: opts.tmux === false });
+      if (!result.ok) { console.error(`omcp teleport: ${result.error ?? "failed"}`); process.exitCode = 1; return; }
+      console.log(`omcp teleport: ${result.slug} -> ${result.worktreePath} (launched: ${result.launched})`);
+    });
+
+  program
+    .command("loop-watcher <action>")
+    .description("Manage the loop watcher daemon: start|stop|status")
+    .action((action: string) => {
+      const scriptPath = resolve(packageRoot, "scripts", "omcp-loop-watcher.mjs");
+      switch (action) {
+        case "start": { const r = startWatcher(scriptPath); console.log(`omcp loop-watcher: started (pid=${r.pid})`); return; }
+        case "stop": { const r = stopWatcher(); console.log(r.stopped ? `omcp loop-watcher: stopped (pid=${r.pid})` : "omcp loop-watcher: not running"); return; }
+        case "status": { const r = statusWatcher(); console.log(r.running ? `omcp loop-watcher: running (pid=${r.pid})` : "omcp loop-watcher: not running"); console.log(`  pid file: ${r.pidFile}`); console.log(`  log file: ${r.logFile}`); return; }
+        default: console.error(`omcp loop-watcher: unknown action '${action}' (start|stop|status)`); process.exitCode = 2;
+      }
+    });
+
+  const execCmd = program
+    .command("exec <prompt>")
+    .description("Run copilot -p non-interactively with omcp logging")
+    .option("--model <id>", "override model")
+    .option("--agent <name>", "use a specific omcp agent")
+    .option("--silent", "suppress stats banner")
+    .option("--no-allow-all-tools", "do not pass --allow-all-tools")
+    .option("--inject <sessionId>", "resume into an existing Copilot session")
+    .option("--share", "pass --share to Copilot")
+    .action((prompt: string, opts: { model?: string; agent?: string; silent?: boolean; allowAllTools?: boolean; inject?: string; share?: boolean }) => {
+      const r = runExec({ prompt, model: opts.model, agent: opts.agent, silent: opts.silent, allowAllTools: opts.allowAllTools, inject: opts.inject, share: opts.share });
+      process.exitCode = r.exitCode;
+    });
+
+  execCmd
+    .command("inject <sessionId> <prompt>")
+    .description("Inject a prompt into an existing Copilot session")
+    .action((sessionId: string, prompt: string) => {
+      const r = runExec({ prompt, inject: sessionId });
+      process.exitCode = r.exitCode;
+    });
+
+  program
+    .command("uninstall")
+    .description("Remove the omcp plugin from ~/.copilot/")
+    .option("--purge", "also remove ~/.copilot/.omcp-config.json")
+    .option("--dry-run", "preview without applying")
+    .action(async (opts: { purge?: boolean; dryRun?: boolean }) => {
+      const r = await runUninstall({ purge: opts.purge, dryRun: opts.dryRun });
+      console.log(formatUninstallReport(r));
+    });
+
+  program
+    .command("cleanup")
+    .description("Remove orphan MCP processes, stale tmp dirs, stale session dirs")
+    .option("--dry-run", "preview without deleting")
+    .option("--max-age-days <n>", "stale-cutoff in days", (v) => Number(v))
+    .action((opts: { dryRun?: boolean; maxAgeDays?: number }) => {
+      const r = runCleanup({ dryRun: opts.dryRun, maxAgeDays: opts.maxAgeDays });
+      console.log(formatCleanupReport(r));
     });
 
   await program.parseAsync(argv);

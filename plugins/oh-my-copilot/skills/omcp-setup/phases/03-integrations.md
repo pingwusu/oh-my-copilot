@@ -12,7 +12,7 @@ grep -q "oh-my-copilot" ~/.copilot/settings.json && echo "Plugin verified" || ec
 
 MCP servers extend Copilot CLI with additional tools (web search, GitHub, etc.).
 
-Use AskUserQuestion: "Would you like to configure MCP servers for enhanced capabilities? (Context7, Exa search, GitHub, etc.)"
+Use ask the user directly (one question at a time): "Would you like to configure MCP servers for enhanced capabilities? (Context7, Exa search, GitHub, etc.)"
 
 If yes, invoke the mcp-setup skill:
 ```
@@ -27,7 +27,7 @@ Agent teams are an experimental Copilot CLI feature that lets you spawn N coordi
 
 Reference: https://github.com/Yeachan-Heo/oh-my-copilot
 
-Use AskUserQuestion:
+Use ask the user directly (one question at a time):
 
 **Question:** "Would you like to enable agent teams? Teams let you spawn coordinated agents (e.g., `/team 3:executor 'fix all errors'`). This is an experimental Copilot CLI feature."
 
@@ -82,7 +82,7 @@ fi
 
 #### 3.3.2: Configure Teammate Display Mode
 
-Use AskUserQuestion:
+Use ask the user directly (one question at a time):
 
 **Question:** "How should teammates be displayed?"
 
@@ -104,7 +104,7 @@ echo "Teammate display mode set to: TEAMMATE_MODE"
 
 #### 3.3.3: Configure Team Defaults in omcp-config
 
-Use AskUserQuestion with multiple questions:
+Use ask the user directly (one question at a time) with multiple questions:
 
 **Question 1:** "How many agents should teams spawn by default?"
 

@@ -143,7 +143,7 @@ gh api user/starred/Yeachan-Heo/oh-my-copilot &>/dev/null
 
 **If NOT starred (exit code non-zero):**
 
-Use AskUserQuestion:
+Use ask the user directly (one question at a time):
 
 **Question:** "If you're enjoying oh-my-copilot, would you like to support the project by starring it on GitHub?"
 

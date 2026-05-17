@@ -5,7 +5,7 @@
 If `--local` flag was passed, set `CONFIG_TARGET=local`.
 If `--global` flag was passed, set `CONFIG_TARGET=global`.
 
-Otherwise (initial setup wizard), use AskUserQuestion to prompt:
+Otherwise (initial setup wizard), use ask the user directly (one question at a time) to prompt:
 
 **Question:** "Where should I configure oh-my-copilot?"
 
@@ -38,7 +38,7 @@ For `local` installs inside a git repository, the script also seeds `.git/info/e
 Tell user to manually download from:
 https://raw.githubusercontent.com/Yeachan-Heo/oh-my-copilot/main/docs/AGENTS.md
 
-**Note**: The downloaded AGENTS.md includes Context Persistence instructions with `<remember>` tags for surviving conversation compaction.
+**Note**: The downloaded AGENTS.md includes Context Persistence instructions with `persist via project memory tools` tags for surviving conversation compaction.
 
 **Note**: If an existing AGENTS.md is found, it will be backed up before downloading the new version.
 

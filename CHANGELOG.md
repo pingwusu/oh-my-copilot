@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0] — 2026-05-17
 
+### Added — DD2 (deep-dive cycle 2) — full omc/omx parity push
+
+**3 new MCP servers** (7 total):
+
+- `omcp-loop` — recurring task scheduler (loop_schedule/list_pending/check_due/cancel/cancel_all/mark_fired). Companion: `scripts/omcp-loop-watcher.mjs` daemon process. Closes the user-flagged "/loop MCP" gap.
+- `omcp-code-intel` — code intelligence (lsp_diagnostics + directory, lsp_document/workspace_symbols, lsp_hover, lsp_find_references, lsp_servers, ast_grep_search, ast_grep_replace). Wraps tsc/ast-grep/grep CLIs.
+- `omcp-hermes` — session-coordination dispatcher (hermes_start_session/send_prompt/read_status/read_tail/list_artifacts/kill_session/list_sessions). tmux-first with detached fallback.
+
+**16 new `omcp` CLI verbs** (wired and tested):
+
+`info`, `list`, `mission-board`, `reasoning`, `state`, `mcp-serve`, `teleport` (+ `--list`/`--remove`), `loop-watcher` (start/stop/status), `exec`, `exec inject`, `uninstall` (`--purge`/`--dry-run`), `cleanup` (`--dry-run`/`--max-age-days`), plus the prior DD1 set (ralph/autopilot/ultrawork/ultraqa/sciomc/plan/ralplan/ccg/learner/deep-interview/deep-dive/external-context/ai-slop-cleaner/visual-verdict/autoresearch/cancel/note/loop/status/session/launch/update).
+
+**Hook + statusLine auto-wiring** into `~/.copilot/config.json`:
+
+- `omcp setup` writes hook entries for PreToolUse/PostToolUse/PreSubmit/PostSubmit/SessionStart/PreEnd that pipe Copilot's tool context into `omcp hook fire <event> --json`.
+- `omcp setup` writes the statusLine entry to invoke `omcp hud`.
+- Idempotent via `__omcp: true` markers; preserves user-authored entries.
+- `omcp doctor` adds two new checks (hook-wiring, statusLine-wiring).
+
+**Runtime depth**:
+
+- `src/runtime/phase-machine.ts` — typed autopilot phase transitions (expansion → planning → execution ↔ qa → validation → cleanup) with bounded loopbacks + ralph→ultraqa carry-over.
+- `src/runtime/mode-state.ts` — session-isolated state: `resolveSessionRoot()` reads `COPILOT_SESSION_ID` / `OMCP_SESSION_ID`; falls back to legacy single-dir layout when no session id present.
+- `src/mcp/memory-validation.ts` — gates `project_memory_write` (reject newline/null-byte keys, exotic types, depth >5, size >64KB).
+
+**HUD rendering engine** (`src/hud/`):
+
+8-element pipeline (model/context/git/token-usage/autopilot/ralph/todos/notepad-priority) replacing the prior 120-line inline mjs. `scripts/omcp-hud.mjs` now thin-wraps the compiled output; back-compat 6-column line preserved.
+
+**Skill catalog +2** (33 total):
+
+- `loop` — wraps the omcp-loop MCP server + watcher daemon
+- `autoresearch` — long-horizon mission/evaluator loop (port of omx)
+
+**Tooling**:
+
+- `verify-catalog` now scans skill subfiles for banned tokens (was top-level only)
+- Banned tokens list expanded: `Skill("oh-my-copilot:` and `"subagent_type":`
+- `scripts/postinstall.ts` — auto-runs `omcp setup --force` after `npm install -g`
+- `package.json` `files:` array now ships `scripts/`, `hooks/`, and `CHANGELOG.md` (was missing — npm tarballs were incomplete)
+- `OMCP_MCP_SERVER_KEYS` extended to all 7 MCP servers (was 6 — `omcp-hermes` was orphaned by `omcp uninstall`)
+- `mcp-serve.ts` SERVER_FILES extended to include code-intel + hermes
+- `omcp uninstall --dry-run` / `--purge` flags
+
+### Fixed — DD2 critic findings (P0 bugs from adversarial review)
+
+- 11 orphan CLI command modules were unreachable — wired into the commander dispatcher
+- `autoresearch` mode was registered but had no SKILL.md — added
+- `package.json` `files:` was missing `scripts/` — fresh npm installs would have crashed `omcp hud` and the loop watcher
+- `OMCP_MCP_SERVER_KEYS` did not include `omcp-hermes` — `omcp uninstall` would have orphaned that key
+- `mcp-serve` SERVER_FILES did not include code-intel/hermes — `omcp mcp-serve <name>` returned "unknown"
+- Subfile banned tokens in skills/omcp-setup/phases/*.md (4× AskUserQuestion + 1× &lt;remember&gt;) — scrubbed; verify-catalog now scans subfiles too
+- `subagent_type` Claude-only dispatch envelope in skills/team/SKILL.md:326 — rewritten to use `/fleet` slash syntax
+
+### Test totals
+
+- 38 vitest files, 242 passing / 2 skipped / 0 failed
+- 23 smoke-e2e assertions pass
+- verify-catalog clean (19 agents, 33 skills)
+- verify-plugin-bundle in sync
+- `copilot plugin list` shows oh-my-copilot v0.3.0
+- `copilot mcp list` shows all 7 omcp MCP servers as workspace-scoped
+
+
+
 ## [0.2.0] — 2026-05-15
 
 ### Added — M0 (2026-05-15)

@@ -25,6 +25,7 @@
     "smoke:e2e": "node dist/scripts/smoke-e2e.js",
     "sync:plugin": "node dist/scripts/sync-plugin-mirror.js",
     "release": "node dist/scripts/release.js",
+    "postinstall": "node dist/scripts/postinstall.js || true",
     "prepack": "npm run build && npm run verify:plugin-bundle"
   },
   "files": [
@@ -36,6 +37,8 @@
     "skills/",
     "prompts/",
     "templates/",
+    "hooks/",
+    "scripts/",
     "plugins/",
     ".claude-plugin/",
     ".agents/plugins/marketplace.json",
@@ -43,6 +46,7 @@
     "AGENTS.md",
     "CLAUDE.md",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
