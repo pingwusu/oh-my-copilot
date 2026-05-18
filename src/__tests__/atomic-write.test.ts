@@ -55,4 +55,16 @@ describe("atomicWriteFileSync", () => {
     atomicWriteFileSync(target, "second");
     expect(readFileSync(target, "utf8")).toBe("second");
   });
+
+  // RC4-P1-A fix: the previous "no temp residue on rename failure" test only ran
+  // on POSIX (chmod read-only dir). On Windows it returned early — masking the
+  // cleanup branch. This cross-platform variant uses a nonexistent parent dir
+  // so openSync of the tmp file fails on every platform.
+  it("leaves no temp residue when open fails (cross-platform)", () => {
+    const bogus = join(dir, "does-not-exist", "out.json");
+    expect(() => atomicWriteFileSync(bogus, "data")).toThrow();
+    // The non-existent dir was never created
+    const files = readdirSync(dir);
+    expect(files).toEqual([]);
+  });
 });

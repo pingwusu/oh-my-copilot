@@ -2,8 +2,10 @@
 // Path resolution: OMCP_TRACE_ROOT env var overrides the default, so tests
 // can isolate to a tmp directory without polluting .omcp/.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
+import { assertSafeSlug } from "./safe-slug.js";
 
 export interface TraceEvent {
   t: string;
@@ -16,6 +18,9 @@ export function traceRoot(): string {
 }
 
 export function traceFile(sessionId: string, root?: string): string {
+  // RC1-P0-1 fix: sessionId reaches path.join from MCP-client input; reject
+  // path-separator-bearing values to close the traversal exploit RC1 reported.
+  assertSafeSlug(sessionId, "sessionId");
   return join(root ?? traceRoot(), `${sessionId}.jsonl`);
 }
 
@@ -33,7 +38,7 @@ export function appendTrace(sessionId: string, ev: TraceEvent, root?: string): v
   const p = traceFile(sessionId, root);
   mkdirSync(dirname(p), { recursive: true });
   const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
-  writeFileSync(p, existing + JSON.stringify(ev) + "\n");
+  atomicWriteFileSync(p, existing + JSON.stringify(ev) + "\n");
 }
 
 export function traceAppend(

@@ -82,6 +82,47 @@ describe("stopTeam", () => {
     stopTeam(sessionId, { killProcess: (pid) => killed.push(pid) });
     expect(killed).toEqual([5555]);
   });
+
+  // RC4-P1-C fix: every prior test injects a fake killProcess, so the real
+  // kill path (SIGTERM / taskkill) has zero coverage. This test spawns a real
+  // child, writes its pid, and calls stopTeam WITHOUT the killProcess override
+  // — exercising the actual platform-aware kill code.
+  it("real spawned child is actually terminated by stopTeam (no killProcess mock)", async () => {
+    const { spawn } = await import("node:child_process");
+    // Spawn a long-running child: node -e "setInterval(()=>{},1e9)"
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(()=>{},1000000000)"],
+      { stdio: "ignore", detached: true },
+    );
+    // Detach so we don't propagate signals from this test process.
+    child.unref();
+    expect(child.pid).toBeGreaterThan(0);
+    const pid = child.pid!;
+
+    const sessionId = "real-kill-session";
+    const pidDir = join(tmp, ".omcp", "state", "team", sessionId);
+    mkdirSync(pidDir, { recursive: true });
+    writeFileSync(join(pidDir, "worker-1.pid"), String(pid));
+
+    // Call stopTeam with NO killProcess override — exercises the real kill path.
+    const report = stopTeam(sessionId);
+    expect(report.killed).toContain(pid);
+
+    // Wait briefly for the OS to deliver the signal then verify the child is dead.
+    await new Promise((res) => setTimeout(res, 250));
+    let alive = true;
+    try {
+      process.kill(pid, 0); // throws ESRCH if dead
+    } catch {
+      alive = false;
+    }
+    if (alive) {
+      // Force-cleanup so the test doesn't leak a zombie process.
+      try { process.kill(pid, "SIGKILL"); } catch { /* may already be dead */ }
+    }
+    expect(alive).toBe(false);
+  });
 });
 
 describe("runTeam detached mode writes pidfiles", () => {

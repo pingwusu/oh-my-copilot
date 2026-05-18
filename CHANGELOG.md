@@ -7,6 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-18
+
+### Added — DD5 iteration (4 independent critics on v0.5.0 + 2 fixer ports)
+
+**+1 skill + 1 CLI verb**: `ultragoal` — durable multi-goal planning with
+quality gates, ported from omx (oh-my-codex). Subcommands: create-goals,
+complete-goals, checkpoint, status, add-goal, record-review-blockers.
+Adds `.omcp/ultragoal/` artifact directory (plan/ledger/brief files).
+
+**+2 CLI verbs (omx parity)**:
+
+- `omcp code-intel <sub>` — wraps the code-intel MCP server tools as CLI:
+  lsp_diagnostics, lsp_diagnostics_directory, ast_grep_search,
+  ast_grep_replace, and the full lsp_* surface.
+- `omcp wiki <sub>` — wraps the wiki MCP server: ingest / query / lint /
+  add / list / read / delete / refresh.
+
+### Fixed — DD5 critic P0/P1
+
+- **CRITICAL: trace runtime had path-traversal** — `traceFile(sessionId)`
+  joined sessionId directly into a path without validation. RC1 reproducer
+  `traceAppend("../../escape", ...)` created a file outside the trace root.
+  Now applies `assertSafeSlug(sessionId, "sessionId")` at the file-name sink.
+- **HIGH: bare writeFileSync in 3 paths bypassed atomic-write** — v0.5.0
+  claimed full atomic coverage but `src/cli/commands/state.ts:writeState`,
+  `src/runtime/trace.ts:appendTrace`, `src/runtime/notepad.ts:ensureFile`,
+  `src/runtime/notepad.ts:saveNotepad`, and `src/runtime/project-memory.ts:saveProjectMemory`
+  all used `writeFileSync` directly. All 5 converted to `atomicWriteFileSync`.
+- **HIGH: marketplace.json version stale** — v0.5.0 bumped package.json
+  and plugin.json but missed `.agents/plugins/marketplace.json`. The
+  `cli-wiring-invariants` test enforces three-way version sync and was
+  silently failing (mistakenly attributed to a pre-existing flake in the
+  v0.5.0 release notes). Now in lockstep.
+- **HIGH: code-intel + wiki CLI verbs not wired** — fixer F-OmxCliVerbs
+  created `src/cli/commands/{code-intel,wiki}.ts` but did not register
+  them in `src/cli/omcp.ts`. `cli-wiring-invariants` would have caught it
+  but the test was already failing for the marketplace.json issue, masking
+  the second defect. Wired now.
+
+### Fixed — DD5 vacuous-test findings (RC4)
+
+- **atomic-write rename-failure test was Windows no-op** — the existing
+  test for "no temp residue on rename failure" early-returned on Windows
+  via `if (platform() === "win32") return`. Added a cross-platform variant
+  that uses a non-existent parent directory so `openSync` of the tmp file
+  fails on every OS (covers the cleanup branch the original missed).
+- **state-store "concurrent writes" was actually serial** —
+  `Promise.resolve(syncFn())` executes `syncFn` synchronously in the same
+  tick, so the prior test triggered zero interleaving. Renamed to
+  "50 sequential writes leave a valid final JSON (design invariant)" and
+  added a NEW test that spawns 3 child node processes hitting the same
+  mode-state file 30× each (real concurrency proof).
+- **team-stop kill path was 100% mock** — every prior `stopTeam` test
+  injected a fake `killProcess`. Added an integration test that spawns
+  a real long-running node child via `child_process.spawn`, writes its
+  pid to the team pidfile, calls `stopTeam` with NO override, and asserts
+  `process.kill(pid, 0)` throws ESRCH (the child is genuinely dead).
+
+### Falsified — claims the critics REJECTED
+
+- **RC1 P0-1 was OVERSTATED narrow-true.** The critic claimed path-traversal
+  in all 3 new runtime modules (trace, notepad, project-memory). On
+  re-probe: trace.ts has the bug (sessionId → join), but notepad and
+  project-memory use env-var-or-fixed paths (no untrusted slug input).
+  Notepad takes a typed `Section` enum, project-memory takes a string
+  data-key (not a path fragment). Only trace.ts needed the safe-slug fix.
+- **RC1 P0-2 / RC1 P1-1 were CORRECT** — main agent's v0.5.0 commit
+  message was caught lying twice this iteration; both fixed.
+- **Prior "F-Ultragoal: defer ultragoal port" decision was WRONG.** F-Ultragoal
+  correctly verified ultragoal doesn't exist in omc 4.9.3 cache but never
+  checked omx. RC2 found ultragoal IS in omx — porting from there now.
+
+### Verified — claims the critics CONFIRMED
+
+- **RC3: omc 4.9.3 vs omcp skill parity = 100%.** Zero omc skills missing
+  from omcp. Plus 9 omcp-original skills (autoresearch / debug / loop /
+  note / remember / self-improve / skillify / verify / wiki).
+- **mode_* MCP tools, atomic-write helper, loop-watcher TOCTOU fix,
+  team detached pidfile fix, cleanup integration test, 7 SKILL.md
+  rewrites** — all verified by RC1 with reproducers.
+
+### Tests
+
+- 51 vitest files, **50 passing files / 337 passing tests / 2 skipped**.
+- 1 file emits an unhandled Windows EPERM worker-fork error during teardown
+  (pre-existing baseline since v0.4.0; unrelated to DD5).
+- New tests added in this iteration:
+  - ultragoal: +11 tests
+  - code-intel CLI smoke + wiki engine + wiki server: +N tests
+  - state-store child_process real-concurrency: +1
+  - team-stop real-subprocess kill: +1
+  - atomic-write cross-platform rename-failure: +1
+- Net: 337 vs 323 at v0.5.0 = +14 net new passing tests.
+
+### Caveats (do-not-trust footnotes from the fixers)
+
+- **ultragoal `checkpoint` final-candidate logic**: omcp port dropped omx's
+  Codex-goal-snapshot reconciliation step (no `/goal` tool in Copilot).
+  May mark aggregate complete prematurely in 3+ goal plans.
+- **ultragoal `record-review-blockers` has no Copilot-goal-state guard**:
+  Ledger records the event but there's no cross-check that an external
+  goal session is still tracking the story.
+- **code-intel CLI** wraps the MCP server tools but does not deeply
+  validate argument shapes; relies on the server's own validation.
+- The 3 fixer-self-warning items from v0.5.0 still stand
+  (mode_write payload shape, atomic-write Windows fsync, stopTeam taskkill).
+
 ## [0.5.0] — 2026-05-18
 
 ### Added — DD4 iteration (4 parallel adversarial fixers, file-isolated)

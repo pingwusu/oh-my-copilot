@@ -2,8 +2,9 @@
 // Path resolution: OMCP_PROJECT_MEMORY env var overrides the default, so tests
 // can isolate to a tmp directory without polluting .omcp/.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
 
 export interface ProjectMemory {
   notes: Array<{ t: string; text: string }>;
@@ -24,7 +25,7 @@ export function loadProjectMemory(path?: string): ProjectMemory {
 export function saveProjectMemory(m: ProjectMemory, path?: string): void {
   const p = path ?? projectMemoryPath();
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(m, null, 2));
+  atomicWriteFileSync(p, JSON.stringify(m, null, 2));
 }
 
 export function projectMemoryRead(): ProjectMemory {

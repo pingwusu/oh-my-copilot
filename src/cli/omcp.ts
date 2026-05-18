@@ -57,6 +57,9 @@ import { runUpdate } from "./commands/update.js";
 import { runNotepadCommand } from "./commands/notepad.js";
 import { runTraceCommand } from "./commands/trace.js";
 import { runProjectMemoryCommand } from "./commands/project-memory.js";
+import { ultragoalCommand } from "./commands/ultragoal.js";
+import { runCodeIntelCommand } from "./commands/code-intel.js";
+import { runWikiCommand } from "./commands/wiki.js";
 
 const MODE_COMMANDS = [
   "ralph",
@@ -548,6 +551,33 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .description("Project-memory CLI: read | write <key> <value-json> | add-note <text> | add-directive <text>")
     .action((subcommand: string, args: string[]) => {
       runProjectMemoryCommand([subcommand, ...args]);
+    });
+
+  program
+    .command("code-intel <subcommand> [args...]")
+    .description("Code-intel CLI: lsp_diagnostics | lsp_diagnostics_directory | ast_grep_search | ast_grep_replace | lsp_* (omx parity)")
+    .action(async (subcommand: string, args: string[]) => {
+      await runCodeIntelCommand([subcommand, ...args]);
+    });
+
+  program
+    .command("wiki <subcommand> [args...]")
+    .description("Wiki CLI: ingest | query | lint | add | list | read | delete | refresh (omx parity)")
+    .action((subcommand: string, args: string[]) => {
+      runWikiCommand([subcommand, ...args]);
+    });
+
+  program
+    .command("ultragoal <subcommand> [args...]")
+    .description(
+      "Durable repo-native multi-goal workflow: create-goals | complete-goals | checkpoint | status | add-goal | record-review-blockers",
+    )
+    .allowUnknownOption()
+    .action((subcommand: string, args: string[]) => {
+      ultragoalCommand([subcommand, ...args]).catch((err: unknown) => {
+        console.error(err);
+        process.exitCode = 1;
+      });
     });
 
   program

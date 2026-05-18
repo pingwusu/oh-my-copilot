@@ -13,9 +13,9 @@ import {
   readdirSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import { assertSafeSlug } from "../../runtime/safe-slug.js";
 
 function stateRoot(): string {
@@ -92,7 +92,7 @@ export function writeState(mode: string, body: unknown): string {
   const root = stateRoot();
   mkdirSync(root, { recursive: true });
   const f = modeFile(mode);
-  writeFileSync(f, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+  atomicWriteFileSync(f, `${JSON.stringify(body, null, 2)}\n`);
   return f;
 }
 

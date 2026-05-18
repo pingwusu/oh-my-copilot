@@ -23,7 +23,8 @@ export type ModeName =
   | "ultraqa"
   | "team"
   | "sciomc"
-  | "ralplan";
+  | "ralplan"
+  | "ultragoal";
 
 export interface BaseModeState {
   active: boolean;
@@ -68,6 +69,7 @@ export const MODE_CONFIGS: Record<ModeName, ModeConfig> = {
   team: { mutuallyExclusive: false },
   sciomc: { mutuallyExclusive: false },
   ralplan: { mutuallyExclusive: false },
+  ultragoal: { mutuallyExclusive: true },
 };
 
 export function resolveSessionRoot(

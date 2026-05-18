@@ -2,8 +2,9 @@
 // Path resolution: OMCP_NOTEPAD_PATH env var overrides the default, so tests
 // can isolate to a tmp directory without polluting .omcp/.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
 
 export const SECTIONS = ["priority", "working", "manual"] as const;
 export type Section = (typeof SECTIONS)[number];
@@ -25,7 +26,7 @@ export function blank(): string {
 export function ensureFile(path: string): void {
   if (!existsSync(path)) {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, blank());
+    atomicWriteFileSync(path, blank());
   }
 }
 
@@ -56,7 +57,7 @@ export function saveNotepad(np: Notepad, path?: string): void {
     for (const line of np[s]) parts.push(`${line}\n`);
     parts.push("");
   }
-  writeFileSync(p, parts.join("\n"));
+  atomicWriteFileSync(p, parts.join("\n"));
 }
 
 export function notepadRead(): Notepad {
