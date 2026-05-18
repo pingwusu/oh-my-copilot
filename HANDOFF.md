@@ -4,7 +4,14 @@
 
 ## 一句话当前状态
 
-omcp **v0.7.0** released。Working tree **干净**(commit pending in this session)。DD8 一轮 4 个独立上下文 critic 在 v0.6.0 上抓到 **2 P0 + 4 P1 + 3 SKILL URL bug** — 全部已修+regression test。Critic-B 78s 后 truncate 中途退出,主 agent 手动算出 omx CLI/skill gap list 已写入 CHANGELOG (DD9 to-port queue)。Build clean,test 54 files / 53 passing (1 worker-fork EPERM crash leaves 8 tests uncounted — 同 v0.5.0+ baseline)。Catalog **19 agents / 41 skills** (与 v0.6.0 一致;DD8 全部是 fix 不是新 surface)。
+omcp **v0.7.0** released (commit `676445a`)。Working tree **干净**。DD8 一轮 4 个独立上下文 critic 在 v0.6.0 上抓到 **2 P0 + 4 P1 + 3 SKILL URL bug** — 全部已修+regression test。Critic-B 78s 后 truncate 中途退出,主 agent 手动算出 omx CLI/skill gap list 已写入 CHANGELOG (DD9 to-port queue)。Build clean,test 54 files / 53 passing (1 worker-fork EPERM crash leaves 8 tests uncounted — 同 v0.5.0+ baseline)。Catalog **19 agents / 41 skills** (与 v0.6.0 一致;DD8 全部是 fix 不是新 surface)。
+
+## 验收 (acceptance) — 2026-05-18 23:55
+
+- **A) omc 4.9.3 parity**: 部分满足 — skill 0 missing (folder + body 100% per Critic C);CLI N/A (omc 无 standalone CLI);**MCP tool 对比未做** (DD9 work)
+- **B) omx parity**: **不满足** — 22 omx skills missing (analyze, code-review, security-review, tdd, deepsearch, design, frontend-ui-ux, git-master, etc.) + 5+ CLI verbs missing (agents, session-search, mcp-parity, performance-goal, autoresearch-goal)
+- **Iteration count**: 7→8 / ≥10 (user 要求 ≥10)
+- **决定**: 继续 DD9 (omx 还有可移植 surface;A 的 MCP tool 对比未完成;iter 未到 10)
 
 ## 工作目录 / 关键路径
 
