@@ -5,6 +5,15 @@
 import { join } from "node:path";
 import { runMcpServer } from "./server-runtime.js";
 import { FileStateStore } from "./state-server.js";
+import {
+  clearModeState,
+  listActiveModes,
+  readModeState,
+  writeModeState,
+  type BaseModeState,
+  type ModeName,
+} from "../runtime/mode-state.js";
+import { assertSafeSlug } from "../runtime/safe-slug.js";
 
 const ROOT = process.env.OMCP_STATE_ROOT ?? join(process.cwd(), ".omcp", "state", "sessions");
 const store = new FileStateStore(ROOT);
@@ -75,6 +84,128 @@ runMcpServer({
         required: ["sessionId"],
       },
       handler: (args) => store.get_status(args.sessionId as string),
+    },
+    {
+      name: "mode_write",
+      description: "Persist mode state payload under .omcp/state/ (omc-compatible shape).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          sessionId: { type: "string" },
+          payload: { type: "object" },
+        },
+        required: ["mode", "payload"],
+      },
+      handler: (args) => {
+        try {
+          assertSafeSlug(args.mode, "mode");
+          if (args.sessionId !== undefined) assertSafeSlug(args.sessionId, "sessionId");
+        } catch (err) {
+          return { isError: true, content: [{ type: "text", text: (err as Error).message }] };
+        }
+        const sid = typeof args.sessionId === "string" ? args.sessionId : undefined;
+        writeModeState(args.mode as ModeName, args.payload as BaseModeState, sid);
+        return { ok: true };
+      },
+    },
+    {
+      name: "mode_read",
+      description: "Read mode state payload from .omcp/state/ (omc-compatible shape).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          sessionId: { type: "string" },
+        },
+        required: ["mode"],
+      },
+      handler: (args) => {
+        try {
+          assertSafeSlug(args.mode, "mode");
+          if (args.sessionId !== undefined) assertSafeSlug(args.sessionId, "sessionId");
+        } catch (err) {
+          return { isError: true, content: [{ type: "text", text: (err as Error).message }] };
+        }
+        const sid = typeof args.sessionId === "string" ? args.sessionId : undefined;
+        return readModeState(args.mode as ModeName, sid);
+      },
+    },
+    {
+      name: "mode_clear",
+      description: "Delete mode state file from .omcp/state/.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          sessionId: { type: "string" },
+        },
+        required: ["mode"],
+      },
+      handler: (args) => {
+        try {
+          assertSafeSlug(args.mode, "mode");
+          if (args.sessionId !== undefined) assertSafeSlug(args.sessionId, "sessionId");
+        } catch (err) {
+          return { isError: true, content: [{ type: "text", text: (err as Error).message }] };
+        }
+        const sid = typeof args.sessionId === "string" ? args.sessionId : undefined;
+        clearModeState(args.mode as ModeName, sid);
+        return { ok: true };
+      },
+    },
+    {
+      name: "mode_list_active",
+      description: "Return ModeName[] where payload.active === true.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          sessionId: { type: "string" },
+        },
+      },
+      handler: (args) => {
+        if (args.sessionId !== undefined) {
+          try {
+            assertSafeSlug(args.sessionId, "sessionId");
+          } catch (err) {
+            return { isError: true, content: [{ type: "text", text: (err as Error).message }] };
+          }
+        }
+        const sid = typeof args.sessionId === "string" ? args.sessionId : undefined;
+        return { modes: listActiveModes(sid) };
+      },
+    },
+    {
+      name: "mode_get_status",
+      description: "Return brief status {active, phase?, iteration?, started_at} for a mode.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          mode: { type: "string" },
+          sessionId: { type: "string" },
+        },
+        required: ["mode"],
+      },
+      handler: (args) => {
+        try {
+          assertSafeSlug(args.mode, "mode");
+          if (args.sessionId !== undefined) assertSafeSlug(args.sessionId, "sessionId");
+        } catch (err) {
+          return { isError: true, content: [{ type: "text", text: (err as Error).message }] };
+        }
+        const sid = typeof args.sessionId === "string" ? args.sessionId : undefined;
+        const s = readModeState<BaseModeState & { phase?: string; iteration?: number }>(
+          args.mode as ModeName,
+          sid,
+        );
+        if (!s) return null;
+        return {
+          active: s.active,
+          ...(s.phase !== undefined ? { phase: s.phase } : {}),
+          ...(s.iteration !== undefined ? { iteration: s.iteration } : {}),
+          ...(s.started_at !== undefined ? { started_at: s.started_at } : {}),
+        };
+      },
     },
   ],
 }).catch((err) => {

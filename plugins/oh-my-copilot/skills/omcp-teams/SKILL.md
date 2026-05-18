@@ -84,7 +84,7 @@ Break work into N independent subtasks (file- or concern-scoped) to avoid write 
 Activate mode state (recommended) — persist via project memory tools:
 
 ```text
-state_write(mode="team", current_phase="team-exec", active=true)
+mode_write(mode="team", payload={current_phase: "team-exec", active: true})
 ```
 
 Start workers via CLI:
@@ -127,7 +127,7 @@ Use shutdown for intentional cancellation or stale-state cleanup. Prefer non-for
 Report task results with completion/failure summary and any remaining risks.
 
 ```text
-state_write(mode="team", current_phase="complete", active=false)
+mode_write(mode="team", payload={current_phase: "complete", active: false})
 ```
 
 ## Deprecated Runtime Note

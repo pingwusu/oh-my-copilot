@@ -2,11 +2,13 @@
 
 import { execSync, spawn } from "node:child_process";
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
 
@@ -20,19 +22,41 @@ function logFile(): string {
 
 export function startWatcher(scriptPath: string): { pid: number } {
   mkdirSync(join(process.cwd(), ".omcp", "state"), { recursive: true });
-  if (isRunning()) {
-    const pid = readPid();
-    throw new Error(`omcp loop-watcher: already running (pid=${pid})`);
+
+  // Atomic exclusive create: openSync with "wx" fails with EEXIST if the
+  // pidfile already exists, eliminating the TOCTOU window between a
+  // liveness check and the write.
+  let fd: number;
+  try {
+    fd = openSync(pidFile(), "wx");
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      const existingPid = readPid();
+      if (isPidAlive(existingPid)) {
+        throw new Error(`omcp loop-watcher: already running (pid=${existingPid})`);
+      }
+      // Stale pidfile — remove and retry once.
+      unlinkSync(pidFile());
+      fd = openSync(pidFile(), "wx");
+    } else {
+      throw e;
+    }
   }
-  const out = require("node:fs").openSync(logFile(), "a");
-  const err = require("node:fs").openSync(logFile(), "a");
+
+  // We hold an exclusive fd on the pidfile. Spawn the child, write the pid, close.
+  const logFd = openSync(logFile(), "a");
   const child = spawn(process.execPath, [scriptPath, "--quiet"], {
     detached: true,
-    stdio: ["ignore", out, err],
+    stdio: ["ignore", logFd, logFd],
   });
   child.unref();
-  if (!child.pid) throw new Error("omcp loop-watcher: spawn failed (no pid)");
-  writeFileSync(pidFile(), String(child.pid));
+  if (!child.pid) {
+    closeSync(fd);
+    unlinkSync(pidFile());
+    throw new Error("omcp loop-watcher: spawn failed (no pid)");
+  }
+  writeSync(fd, Buffer.from(String(child.pid)));
+  closeSync(fd);
   return { pid: child.pid };
 }
 
@@ -67,11 +91,6 @@ export function statusWatcher(): {
 
 function readPid(): number {
   return Number(readFileSync(pidFile(), "utf8").trim());
-}
-
-function isRunning(): boolean {
-  if (!existsSync(pidFile())) return false;
-  return isPidAlive(readPid());
 }
 
 function isPidAlive(pid: number): boolean {

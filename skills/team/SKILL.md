@@ -222,10 +222,12 @@ Create a team handle with a slug derived from the task (e.g., `fix-ts-errors`). 
 }
 ```
 
-Write omcp state using the `state_write` MCP tool for proper session-scoped persistence:
+Write omcp state using the `mode_write` MCP tool for proper session-scoped persistence:
 
 ```
-state_write(mode="team", active=true, current_phase="team-plan", state={
+mode_write(mode="team", payload={
+  "active": true,
+  "current_phase": "team-plan",
   "team_name": "fix-ts-errors",
   "agent_count": 3,
   "agent_types": "executor",
@@ -236,8 +238,6 @@ state_write(mode="team", active=true, current_phase="team-plan", state={
   "stage_history": "team-plan"
 })
 ```
-
-> **Note:** The MCP `state_write` tool transports all values as strings. Consumers must coerce `agent_count`, `fix_loop_count`, `max_fix_loops` to numbers and `linked_ralph` to boolean when reading state.
 
 **State schema fields:**
 
@@ -257,7 +257,8 @@ state_write(mode="team", active=true, current_phase="team-plan", state={
 **Update state on every stage transition:**
 
 ```
-state_write(mode="team", current_phase="team-exec", state={
+mode_write(mode="team", payload={
+  "current_phase": "team-exec",
   "stage_history": "team-plan:2026-02-07T12:00:00Z,team-prd:2026-02-07T12:01:00Z,team-exec:2026-02-07T12:02:00Z"
 })
 ```
@@ -265,7 +266,7 @@ state_write(mode="team", current_phase="team-exec", state={
 **Read state for resume detection:**
 
 ```
-state_read(mode="team")
+mode_read(mode="team")
 ```
 
 If `active=true` and `current_phase` is non-terminal, resume from the last incomplete stage instead of creating a new team.
@@ -377,21 +378,20 @@ On every stage transition, update omcp state:
 
 ```
 // Entering team-exec after planning
-state_write(mode="team", current_phase="team-exec", state={
+mode_write(mode="team", payload={
+  "current_phase": "team-exec",
   "stage_history": "team-plan:T1,team-prd:T2,team-exec:T3"
 })
 
 // Entering team-verify after execution
-state_write(mode="team", current_phase="team-verify")
+mode_write(mode="team", payload={"current_phase": "team-verify"})
 
 // Entering team-fix after verify failure
-state_write(mode="team", current_phase="team-fix", state={
-  "fix_loop_count": 1
-})
+mode_write(mode="team", payload={"current_phase": "team-fix", "fix_loop_count": 1})
 ```
 
 This enables:
-- **Resume**: If the lead crashes, `state_read(mode="team")` reveals the last stage and team name for recovery
+- **Resume**: If the lead crashes, `mode_read(mode="team")` reveals the last stage and team name for recovery
 - **Cancel**: The cancel skill reads `current_phase` to know what cleanup is needed
 - **Ralph integration**: Ralph can read team state to know if the pipeline completed or failed
 
@@ -754,15 +754,21 @@ Team+Ralph activates when:
 Both modes write their own state files with cross-references:
 
 ```
-// Team state (via state_write)
-state_write(mode="team", active=true, current_phase="team-plan", state={
+// Team state (via mode_write)
+mode_write(mode="team", payload={
+  "active": true,
+  "current_phase": "team-plan",
   "team_name": "build-rest-api",
   "linked_ralph": true,
   "task": "build a complete REST API"
 })
 
-// Ralph state (via state_write)
-state_write(mode="ralph", active=true, iteration=1, max_iterations=10, current_phase="execution", state={
+// Ralph state (via mode_write)
+mode_write(mode="ralph", payload={
+  "active": true,
+  "iteration": 1,
+  "max_iterations": 10,
+  "current_phase": "execution",
   "linked_team": true,
   "team_name": "build-rest-api"
 })
@@ -822,12 +828,12 @@ This prevents duplicate teams and allows graceful recovery from lead failures.
 
 The `/oh-my-copilot:cancel` skill handles team cleanup:
 
-1. Read team state via `state_read(mode="team")` to get `team_name` and `linked_ralph`
+1. Read team state via `mode_read(mode="team")` to get `team_name` and `linked_ralph`
 2. Send `shutdown_request` to all active teammates (from `config.json` members)
 3. Wait for `shutdown_response` from each (15s timeout per member)
 4. Tear down the team handle (removes team and task directories)
-5. Clear state via `state_clear(mode="team")`
-6. If `linked_ralph` is true, also clear ralph: `state_clear(mode="ralph")`
+5. Clear state via `mode_clear(mode="team")`
+6. If `linked_ralph` is true, also clear ralph: `mode_clear(mode="ralph")`
 
 ### Linked Mode Cancellation (Team + Ralph)
 
@@ -835,7 +841,7 @@ When team is linked to ralph, cancellation follows dependency order:
 
 - **Cancel triggered from Ralph context:** Cancel Team first (graceful shutdown of all teammates), then clear Ralph state. This ensures workers are stopped before the persistence loop exits.
 - **Cancel triggered from Team context:** Clear Team state, then mark Ralph as cancelled. Ralph's stop hook will detect the missing team and stop iterating.
-- **Force cancel (`--force`):** Clears both `team` and `ralph` state unconditionally via `state_clear`.
+- **Force cancel (`--force`):** Clears both `team` and `ralph` state unconditionally via `mode_clear`.
 
 If teammates are unresponsive, team teardown may fail. In that case, the cancel skill should wait briefly and retry, or inform the user to manually clean up `~/.copilot/teams/{team_name}/` and `~/.copilot/tasks/{team_name}/`.
 
@@ -891,11 +897,11 @@ On successful completion:
    - Removes `~/.copilot/tasks/{team_name}/` (all task files + lock)
 2. omcp state cleanup via MCP tools:
    ```
-   state_clear(mode="team")
+   mode_clear(mode="team")
    ```
    If linked to Ralph:
    ```
-   state_clear(mode="ralph")
+   mode_clear(mode="ralph")
    ```
 3. Or run `/oh-my-copilot:cancel` which handles all cleanup automatically.
 

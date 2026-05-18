@@ -123,7 +123,7 @@ By default, ralph operates in PRD mode. A scaffold `prd.json` is auto-generated 
 - Use `omcp ask codex --agent-prompt critic "..."` when `--critic=codex`
 - Skip architect consultation for simple feature additions, well-tested changes, or time-critical verification
 - Proceed with architect agent verification alone -- never block on unavailable tools
-- Use the omcp state MCP tools (`state_write` / `state_read`) for ralph mode state persistence between iterations
+- Use the omcp mode MCP tools (`mode_write` / `mode_read`) for ralph mode state persistence between iterations
 </Tool_Usage>
 
 <Examples>

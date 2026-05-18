@@ -40,12 +40,13 @@ Or say: "cancelomcp", "stopomcp".
 
 ## State Tool Availability
 
-The state management tools (`state_clear`, `state_read`, `state_write`, `state_list_active`,
+The state management tools (`mode_clear`, `mode_read`, `mode_write`, `mode_list_active`,
+`mode_get_status`, `state_clear`, `state_read`, `state_write`, `state_list_active`,
 `state_get_status`) are provided by the omcp state MCP server. Ensure the server is configured in
 `~/.copilot/mcp-config.json` before relying on them. If those tools are not available in the current
 Copilot session, fall back to the bash deletion path below.
 
-If `state_clear` is unavailable or fails, use this **bash fallback** as an **emergency
+If `mode_clear` is unavailable or fails, use this **bash fallback** as an **emergency
 escape from the stop hook loop**. This is NOT a full replacement for the cancel flow —
 it only removes state files to unblock the session. Linked modes (e.g. ralph→ultrawork,
 autopilot→ralph/ultraqa) must be cleared separately by running the fallback once per mode.
@@ -53,11 +54,11 @@ autopilot→ralph/ultraqa) must be cleared separately by running the fallback on
 Replace `MODE` with the specific mode (e.g. `ralplan`, `ralph`, `ultrawork`, `ultraqa`).
 
 **WARNING:** Do NOT use this fallback for `autopilot` or `omcp-teams`. Autopilot requires
-`state_write(active=false)` to preserve resume data. omcp-teams requires tmux session
+`mode_write(mode=MODE, payload={active: false})` to preserve resume data. omcp-teams requires tmux session
 cleanup that cannot be done via file deletion alone.
 
 ```bash
-# Fallback: direct file removal when state_clear MCP tool is unavailable
+# Fallback: direct file removal when mode_clear MCP tool is unavailable
 SESSION_ID="${COPILOT_SESSION_ID:-${OMCP_SESSION_ID:-}}"
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || { d="$PWD"; while [ "$d" != "/" ] && [ ! -d "$d/.omcp" ]; do d="$(dirname "$d")"; done; echo "$d"; })"
 
@@ -99,10 +100,10 @@ fi
 ## Auto-Detection
 
 `/oh-my-copilot:cancel` follows the session-aware state contract:
-- By default the command inspects the current session via `state_list_active` and `state_get_status`, navigating `.omcp/state/sessions/{sessionId}/…` to discover which mode is active.
+- By default the command inspects the current session via `mode_list_active` and `mode_get_status`, navigating `.omcp/state/sessions/{sessionId}/…` to discover which mode is active.
 - When a session id is provided or already known, that session-scoped path is authoritative. Legacy files in `.omcp/state/*.json` are consulted only as a compatibility fallback if the session id is missing or empty.
 - Swarm is a shared SQLite/marker mode (`.omcp/state/swarm.db` / `.omcp/state/swarm-active.marker`) and is not session-scoped.
-- The default cleanup flow calls `state_clear` with the session id to remove only the matching session files; modes stay bound to their originating session.
+- The default cleanup flow calls `mode_clear` with the session id to remove only the matching session files; modes stay bound to their originating session.
 
 Active modes are still cancelled in dependency order:
 1. Autopilot (includes linked ralph/ultraqa cleanup)
@@ -129,13 +130,13 @@ Use `--force` or `--all` when you need to erase every session plus legacy artifa
 ```
 
 Steps under the hood:
-1. `state_list_active` enumerates `.omcp/state/sessions/{sessionId}/…` to find every known session.
-2. `state_clear` runs once per session to drop that session’s files.
-3. A global `state_clear` without `session_id` removes legacy files under `.omcp/state/*.json`, `.omcp/state/swarm*.db`, and compatibility artifacts (see list).
+1. `mode_list_active` enumerates `.omcp/state/sessions/{sessionId}/…` to find every known session.
+2. `mode_clear` runs once per session to drop that session’s files.
+3. A global `mode_clear` without `sessionId` removes legacy files under `.omcp/state/*.json`, `.omcp/state/swarm*.db`, and compatibility artifacts (see list).
 4. Team artifacts (`~/.copilot/teams/*/`, `~/.copilot/tasks/*/`, `.omcp/state/team-state.json`) are best-effort cleared as part of the legacy fallback.
    - Cancel for native team does NOT affect omcp-teams state, and vice versa.
 
-Every `state_clear` command honors the `session_id` argument, so even force mode still uses the session-aware paths first before deleting legacy files.
+Every `mode_clear` command honors the `sessionId` argument, so even force mode still uses the session-aware paths first before deleting legacy files.
 
 Legacy compatibility list (removed only under `--force`/`--all`):
 - `.omcp/state/autopilot-state.json`
@@ -188,7 +189,7 @@ The skill now relies on the session-aware state contract rather than hard-coded 
 
 ### 3A. Force Mode (if --force or --all)
 
-Use force mode to clear every session plus legacy artifacts via `state_clear`. Direct file removal is reserved for legacy cleanup when the state tools report no active sessions.
+Use force mode to clear every session plus legacy artifacts via `mode_clear`. Direct file removal is reserved for legacy cleanup when the state tools report no active sessions.
 
 ### 3B. Smart Cancellation (default)
 
@@ -230,10 +231,10 @@ After graceful pass:
 **Team teardown + Cleanup:**
 ```
   1. Call the team teardown — removes ~/.copilot/teams/{name}/ and ~/.copilot/tasks/{name}/
-  2. Clear team state: state_clear(mode="team")
-  3. Check for linked ralph: state_read(mode="ralph") — if linked_team is true:
-     a. Clear ralph state: state_clear(mode="ralph")
-     b. Clear linked ultrawork if present: state_clear(mode="ultrawork")
+  2. Clear team state: mode_clear(mode="team")
+  3. Check for linked ralph: mode_read(mode="ralph") — if linked_team is true:
+     a. Clear ralph state: mode_clear(mode="ralph")
+     b. Clear linked ultrawork if present: mode_clear(mode="ultrawork")
   4. Run orphan scan (see below)
   5. Emit structured cancel report
 ```
@@ -270,38 +271,38 @@ Team "{team_name}" cancelled:
 4. Wait briefly for shutdown responses (15s per member timeout)
 5. Re-read config.json to check for remaining members (reconciliation pass)
 6. Call the team teardown to clean up
-7. Clear team state: `state_clear(mode="team", session_id)`
+7. Clear team state: `mode_clear(mode="team", sessionId=<session_id>)`
 8. Report structured summary to the user
 
 #### If Autopilot Active
 
 Autopilot handles its own cleanup including linked ralph and ultraqa.
 
-1. Read autopilot state via `state_read(mode="autopilot", session_id)` to get current phase
-2. Check for linked ralph via `state_read(mode="ralph", session_id)`:
-   - If ralph is active and has `linked_ultrawork: true`, clear ultrawork first: `state_clear(mode="ultrawork", session_id)`
-   - Clear ralph: `state_clear(mode="ralph", session_id)`
-3. Check for linked ultraqa via `state_read(mode="ultraqa", session_id)`:
-   - If active, clear it: `state_clear(mode="ultraqa", session_id)`
-4. Mark autopilot inactive (preserve state for resume) via `state_write(mode="autopilot", session_id, state={active: false, ...existing})`
+1. Read autopilot state via `mode_read(mode="autopilot", sessionId=<session_id>)` to get current phase
+2. Check for linked ralph via `mode_read(mode="ralph", sessionId=<session_id>)`:
+   - If ralph is active and has `linked_ultrawork: true`, clear ultrawork first: `mode_clear(mode="ultrawork", sessionId=<session_id>)`
+   - Clear ralph: `mode_clear(mode="ralph", sessionId=<session_id>)`
+3. Check for linked ultraqa via `mode_read(mode="ultraqa", sessionId=<session_id>)`:
+   - If active, clear it: `mode_clear(mode="ultraqa", sessionId=<session_id>)`
+4. Mark autopilot inactive (preserve state for resume) via `mode_write(mode="autopilot", sessionId=<session_id>, payload={active: false, ...existing})`
 
 #### If Ralph Active (but not Autopilot)
 
-1. Read ralph state via `state_read(mode="ralph", session_id)` to check for linked ultrawork
+1. Read ralph state via `mode_read(mode="ralph", sessionId=<session_id>)` to check for linked ultrawork
 2. If `linked_ultrawork: true`:
    - Read ultrawork state to verify `linked_to_ralph: true`
-   - If linked, clear ultrawork: `state_clear(mode="ultrawork", session_id)`
-3. Clear ralph: `state_clear(mode="ralph", session_id)`
+   - If linked, clear ultrawork: `mode_clear(mode="ultrawork", sessionId=<session_id>)`
+3. Clear ralph: `mode_clear(mode="ralph", sessionId=<session_id>)`
 
 #### If Ultrawork Active (standalone, not linked)
 
-1. Read ultrawork state via `state_read(mode="ultrawork", session_id)`
+1. Read ultrawork state via `mode_read(mode="ultrawork", sessionId=<session_id>)`
 2. If `linked_to_ralph: true`, warn user to cancel ralph instead (which cascades)
-3. Otherwise clear: `state_clear(mode="ultrawork", session_id)`
+3. Otherwise clear: `mode_clear(mode="ultrawork", sessionId=<session_id>)`
 
 #### If UltraQA Active (standalone)
 
-Clear directly: `state_clear(mode="ultraqa", session_id)`
+Clear directly: `mode_clear(mode="ultraqa", sessionId=<session_id>)`
 
 #### No Active Modes
 
@@ -311,9 +312,9 @@ Report: "No active omcp modes detected. Use --force to clear all state files any
 
 The cancel skill runs as follows:
 1. Parse the `--force` / `--all` flags, tracking whether cleanup should span every session or stay scoped to the current session id.
-2. Use `state_list_active` to enumerate known session ids and `state_get_status` to learn the active mode (`autopilot`, `ralph`, `ultrawork`, etc.) for each session.
-3. When operating in default mode, call `state_clear` with that session_id to remove only the session’s files, then run mode-specific cleanup (autopilot → ralph → …) based on the state tool signals.
-4. In force mode, iterate every active session, call `state_clear` per session, then run a global `state_clear` without `session_id` to drop legacy files (`.omcp/state/*.json`, compatibility artifacts) and report success. Swarm remains a shared SQLite/marker mode outside session scoping.
+2. Use `mode_list_active` to enumerate known session ids and `mode_get_status` to learn the active mode (`autopilot`, `ralph`, `ultrawork`, etc.) for each session.
+3. When operating in default mode, call `mode_clear` with that sessionId to remove only the session’s files, then run mode-specific cleanup (autopilot → ralph → …) based on the state tool signals.
+4. In force mode, iterate every active session, call `mode_clear` per session, then run a global `mode_clear` without `sessionId` to drop legacy files (`.omcp/state/*.json`, compatibility artifacts) and report success. Swarm remains a shared SQLite/marker mode outside session scoping.
 5. Team artifacts (`~/.copilot/teams/*/`, `~/.copilot/tasks/*/`, `.omcp/state/team-state.json`) remain best-effort cleanup items invoked during the legacy/global pass.
 
 State tools always honor the `session_id` argument, so even force mode still clears the session-scoped paths before deleting compatibility-only legacy state.

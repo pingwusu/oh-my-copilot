@@ -48,7 +48,7 @@ Inside Copilot, invoke skills via:
 | `omcp update`     | `npm install -g oh-my-copilot@latest` then refresh install      |
 | `omcp cleanup`    | Remove orphan MCP processes, stale tmp dirs, stale session dirs |
 | `omcp info`       | Diagnostic dump of catalog, MCP servers, env vars, paths        |
-| `omcp version`    | Print version                                                   |
+| `omcp --version`  | Print version (commander standard, `-V` also accepted)          |
 
 ### Mode launchers (all wrap `copilot -p "/oh-my-copilot:<mode> <task>"`)
 
@@ -69,6 +69,11 @@ Inside Copilot, invoke skills via:
 | `omcp ai-slop-cleaner`    | Regression-safe AI-slop cleanup                       |
 | `omcp visual-verdict`     | Visual QA verdict from screenshot comparison          |
 | `omcp autoresearch …`     | Long-horizon mission/evaluator loop (detached tmux)   |
+| `omcp self-improve "x"`   | Critique-then-refine the working artifact in place    |
+| `omcp verify "task"`      | Run the verifier skill against the current changeset  |
+| `omcp debug "symptom"`    | Hypothesis-driven debugger skill (rep + bisect)       |
+| `omcp remember "fact"`    | Memory write — pin a fact for future omcp sessions    |
+| `omcp skillify "topic"`   | Promote ad-hoc patterns into a reusable SKILL.md      |
 | `omcp ask <family> "q"`   | One-shot non-interactive question (family=claude\|gpt\|auto) |
 | `omcp exec "prompt"`      | Non-interactive run with omcp logging (history.jsonl) |
 | `omcp exec inject <sid>`  | Inject prompt into existing Copilot session           |
@@ -84,6 +89,9 @@ Inside Copilot, invoke skills via:
 | `omcp teleport <issue>`          | Create git worktree under `~/Workspace/omcp-worktrees/` |
 | `omcp cancel`                    | Write `.omcp/state/cancel.json` marker           |
 | `omcp note "text"`               | Append a priority note to `.omcp/notepad.md`     |
+| `omcp notepad <sub> [args…]`     | read \| write-priority \| write-working \| write-manual \| prune \| stats |
+| `omcp trace <sub> [args…]`       | timeline `<sid>` [--limit=N] \| summary `<sid>` |
+| `omcp project-memory <sub>`      | read \| write `<k>` `<json>` \| add-note \| add-directive |
 | `omcp status`                    | Snapshot: active modes, ralph iter, team workers, cancel |
 | `omcp session [grep]`            | List sessions under `.omcp/state/sessions/`      |
 | `omcp state <action>`            | list \| read \| write \| clear \| clear-all      |
@@ -98,7 +106,7 @@ Inside Copilot, invoke skills via:
 
 | Server               | Tools                                                       |
 | -------------------- | ----------------------------------------------------------- |
-| `omcp-state`         | state_read/write/clear/list_active/get_status               |
+| `omcp-state`         | state_read/write/clear/list_active/get_status + mode_read/write/clear/list_active/get_status (typed mode-state) |
 | `omcp-notepad`       | notepad_read/write_priority/write_working/write_manual/prune/stats |
 | `omcp-trace`         | trace_append/summary/timeline                               |
 | `omcp-project-memory`| project_memory_read/write/add_note/add_directive (validated) |

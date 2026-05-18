@@ -1,15 +1,24 @@
 // `omcp team <spec> <task>` — spawn a parallel team of Copilot workers.
 //
 // Spec syntax:
-//   N:agent          e.g. "4:executor"  → 4 workers, each running --agent executor
-//   N                e.g. "4"           → 4 workers, no agent specified
+//   N:agent          e.g. "4:executor"  -> 4 workers, each running --agent executor
+//   N                e.g. "4"           -> 4 workers, no agent specified
 //
 // Implementation: when tmux is available on PATH, create a session with N panes.
 // Otherwise spawn N detached `copilot -p` processes and write per-worker logs
 // under .omcp/state/sessions/<uuid>/worker-K.log.
+// Per-worker pidfiles are written to .omcp/state/team/<sessionId>/worker-K.pid
+// so that stopTeam can SIGTERM them on Ctrl+C.
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
@@ -43,6 +52,8 @@ export interface TeamLaunchReport {
   agent?: string;
   mode: "tmux" | "detached";
   logDir: string;
+  /** Only present in detached mode. Directory containing per-worker .pid files. */
+  pidDir?: string;
 }
 
 export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
@@ -72,11 +83,18 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
     return { sessionId, count: spec.count, agent: spec.agent, mode: "tmux", logDir };
   }
 
+  const pidDir = join(process.cwd(), ".omcp", "state", "team", sessionId);
+  mkdirSync(pidDir, { recursive: true });
+
   for (let i = 0; i < spec.count; i++) {
     const args = ["-p", `${task} (worker ${i + 1}/${spec.count})`, "--allow-all-tools"];
     if (spec.agent) args.push("--agent", spec.agent);
     const child = spawn("copilot", args, { detached: true, stdio: "ignore" });
     child.unref();
+    if (child.pid !== undefined) {
+      // Record the worker pid so stopTeam can SIGTERM it later.
+      writeFileSync(join(pidDir, `worker-${i + 1}.pid`), String(child.pid));
+    }
   }
   return {
     sessionId,
@@ -84,5 +102,63 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
     agent: spec.agent,
     mode: "detached",
     logDir,
+    pidDir,
   };
+}
+
+export interface TeamStopReport {
+  sessionId: string;
+  killed: number[];
+  errors: string[];
+}
+
+/**
+ * Stop all detached workers for a session by reading their pidfiles,
+ * SIGTERMing them, and removing the pidfiles.
+ */
+export function stopTeam(
+  sessionId: string,
+  opts: {
+    /** Test hook: override process killer. Defaults to platform SIGTERM/taskkill. */
+    killProcess?: (pid: number) => void;
+  } = {},
+): TeamStopReport {
+  const killProcess =
+    opts.killProcess ??
+    ((pid: number) => {
+      if (process.platform === "win32") {
+        spawnSync("taskkill", ["/PID", String(pid), "/F"], { stdio: "ignore" });
+      } else {
+        process.kill(pid, "SIGTERM");
+      }
+    });
+
+  const pidDir = join(process.cwd(), ".omcp", "state", "team", sessionId);
+  const killed: number[] = [];
+  const errors: string[] = [];
+
+  if (!existsSync(pidDir)) {
+    return { sessionId, killed, errors };
+  }
+
+  for (const f of readdirSync(pidDir)) {
+    if (!f.endsWith(".pid")) continue;
+    const pidPath = join(pidDir, f);
+    try {
+      const pid = Number(readFileSync(pidPath, "utf8").trim());
+      if (Number.isFinite(pid) && pid > 0) {
+        try {
+          killProcess(pid);
+          killed.push(pid);
+        } catch (err) {
+          errors.push(`kill ${pid}: ${(err as Error).message}`);
+        }
+      }
+      unlinkSync(pidPath);
+    } catch (err) {
+      errors.push(`read ${pidPath}: ${(err as Error).message}`);
+    }
+  }
+
+  return { sessionId, killed, errors };
 }

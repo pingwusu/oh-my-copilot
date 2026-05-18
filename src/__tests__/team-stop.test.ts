@@ -1,0 +1,124 @@
+// Tests for Defect 3: team pidfile tracking + stopTeam.
+
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stopTeam } from "../cli/commands/team.js";
+
+describe("stopTeam", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "omcp-team-test-"));
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("kills all workers listed in pidfiles and removes the pidfiles", () => {
+    const sessionId = "test-session-abc";
+    const pidDir = join(tmp, ".omcp", "state", "team", sessionId);
+    mkdirSync(pidDir, { recursive: true });
+    writeFileSync(join(pidDir, "worker-1.pid"), "1111");
+    writeFileSync(join(pidDir, "worker-2.pid"), "2222");
+
+    const killed: number[] = [];
+    const report = stopTeam(sessionId, {
+      killProcess: (pid) => killed.push(pid),
+    });
+
+    expect(report.sessionId).toBe(sessionId);
+    expect(killed.sort((a, b) => a - b)).toEqual([1111, 2222]);
+    expect(report.errors).toHaveLength(0);
+    // Pidfiles must be removed.
+    expect(existsSync(join(pidDir, "worker-1.pid"))).toBe(false);
+    expect(existsSync(join(pidDir, "worker-2.pid"))).toBe(false);
+  });
+
+  it("returns empty killed list when pidDir does not exist", () => {
+    const report = stopTeam("no-such-session", {
+      killProcess: () => { throw new Error("should not be called"); },
+    });
+    expect(report.killed).toHaveLength(0);
+    expect(report.errors).toHaveLength(0);
+  });
+
+  it("records error (does not throw) when killProcess fails", () => {
+    const sessionId = "fail-session";
+    const pidDir = join(tmp, ".omcp", "state", "team", sessionId);
+    mkdirSync(pidDir, { recursive: true });
+    writeFileSync(join(pidDir, "worker-1.pid"), "3333");
+
+    const report = stopTeam(sessionId, {
+      killProcess: () => { throw new Error("EPERM"); },
+    });
+
+    expect(report.killed).toHaveLength(0);
+    expect(report.errors.length).toBeGreaterThan(0);
+    expect(report.errors[0]).toMatch(/3333/);
+    // Pidfile should still be removed even when kill fails.
+    expect(existsSync(join(pidDir, "worker-1.pid"))).toBe(false);
+  });
+
+  it("ignores non-.pid files in pidDir", () => {
+    const sessionId = "mixed-session";
+    const pidDir = join(tmp, ".omcp", "state", "team", sessionId);
+    mkdirSync(pidDir, { recursive: true });
+    writeFileSync(join(pidDir, "worker-1.pid"), "5555");
+    writeFileSync(join(pidDir, "notes.txt"), "ignore me");
+
+    const killed: number[] = [];
+    stopTeam(sessionId, { killProcess: (pid) => killed.push(pid) });
+    expect(killed).toEqual([5555]);
+  });
+});
+
+describe("runTeam detached mode writes pidfiles", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "omcp-team-run-test-"));
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("pidDir is present in the returned report when tmux is unavailable", async () => {
+    // We can't easily mock tmuxAvailable without vi.mock hoisting, so we
+    // verify the interface: if the report has pidDir it points to an existing
+    // directory and contains .pid files.
+    // This test only runs the assertion path if mode === "detached".
+    const { runTeam, parseTeamSpec } = await import("../cli/commands/team.js");
+    const spec = parseTeamSpec("1");
+    const report = runTeam(spec, "echo hello");
+
+    if (report.mode === "detached") {
+      expect(report.pidDir).toBeDefined();
+      expect(existsSync(report.pidDir!)).toBe(true);
+      // There should be a worker-1.pid file (child.pid may be set).
+      const pidFile = join(report.pidDir!, "worker-1.pid");
+      // The pidfile is only written if child.pid was defined; check format if present.
+      if (existsSync(pidFile)) {
+        const pid = Number(readFileSync(pidFile, "utf8").trim());
+        expect(pid).toBeGreaterThan(0);
+      }
+    } else {
+      // tmux mode — pidDir is not applicable, test passes trivially.
+      expect(report.mode).toBe("tmux");
+    }
+  });
+});

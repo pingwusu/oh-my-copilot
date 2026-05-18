@@ -11,9 +11,9 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
 import { assertSafeSlug } from "./safe-slug.js";
 
 export type ModeName =
@@ -120,7 +120,7 @@ export function writeModeState<T extends BaseModeState>(
 ): void {
   const f = modeFile(mode, sessionId);
   mkdirSync(stateRoot(sessionId), { recursive: true });
-  writeFileSync(f, JSON.stringify(state, null, 2));
+  atomicWriteFileSync(f, JSON.stringify(state, null, 2));
 }
 
 export function clearModeState(mode: ModeName, sessionId?: string): void {

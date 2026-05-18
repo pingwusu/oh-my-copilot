@@ -50,6 +50,7 @@ Prefix: `oh-my-copilot:`. See `agents/*.md` for full prompts.
 
 ### OMCP state
 - `state_read`, `state_write`, `state_clear`, `state_list_active`, `state_get_status`
+- `mode_write`, `mode_read`, `mode_clear`, `mode_list_active`, `mode_get_status`
 
 ### Team runtime
 - `/fleet`, `/delegate`, `/tasks` (Copilot CLI surface replaces Claude Code's TeamCreate/Task/SendMessage)

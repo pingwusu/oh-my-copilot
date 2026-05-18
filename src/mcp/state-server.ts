@@ -9,9 +9,9 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { atomicWriteFileSync } from "../runtime/atomic-write.js";
 import { assertSafeSlug } from "../runtime/safe-slug.js";
 
 export interface StateStore {
@@ -41,7 +41,7 @@ export class FileStateStore implements StateStore {
   }
 
   private save(sessionId: string, data: Record<string, string>): void {
-    writeFileSync(this.sessionFile(sessionId), JSON.stringify(data, null, 2));
+    atomicWriteFileSync(this.sessionFile(sessionId), JSON.stringify(data, null, 2));
   }
 
   read(sessionId: string, key: string): string | undefined {

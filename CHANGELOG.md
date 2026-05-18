@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-18
+
+### Added — DD4 iteration (4 parallel adversarial fixers, file-isolated)
+
+**+1 runtime helper**: `src/runtime/atomic-write.ts` — `atomicWriteFileSync(path, data)`
+writes to `path.tmp.<pid>.<rand>`, fsyncs, then atomic-renames over `path`.
+Applied to every state-file sink in `state-server.ts` and `mode-state.ts`,
+closing the silent-corruption window under concurrent writes.
+
+**+5 MCP tools on `omcp-state`** (typed mode-state surface — omc-shape parity):
+
+- `mode_write({ mode, sessionId?, payload })` — write typed mode state
+- `mode_read({ mode, sessionId? })` — read typed mode state (null if absent)
+- `mode_clear({ mode, sessionId? })` — delete the mode file
+- `mode_list_active({ sessionId? })` — list mode names with `active: true`
+- `mode_get_status({ mode, sessionId? })` — brief: `{active, phase?, iteration?, started_at}`
+
+Every tool slug-validates `mode` and `sessionId` via `assertSafeSlug` (same
+defense-in-depth that closed the path-traversal exploit). 7 skill SKILL.md
+files (cancel/team/plan/self-improve/omcp-teams/omcp-reference/ralph) rewritten
+to call `mode_write/read/clear` instead of the previous omc-shape
+`state_write(mode=..., active=...)` calls that the MCP server's KV API
+silently rejected.
+
+**+3 CLI verbs** (omx-parity for shell-driven access to the runtime layer):
+
+- `omcp notepad <sub>` — read | write-priority | write-working | write-manual | prune | stats
+- `omcp trace <sub>` — timeline `<sid>` [--limit=N] | summary `<sid>`
+- `omcp project-memory <sub>` — read | write `<k>` `<json>` | add-note | add-directive
+
+Backed by 3 new pure-functional runtime modules under `src/runtime/`
+(notepad.ts, trace.ts, project-memory.ts). Both the MCP servers AND the
+new CLI commands import from these — single source of truth.
+
+**+1 CLI surface**: `stopTeam(sessionId)` (programmatic API exported from
+`src/cli/commands/team.ts`) — reads per-worker pidfiles written at spawn
+time and SIGTERM-kills them (taskkill on Windows). Closes the
+ctrl-C-leaks-detached-workers race.
+
+### Fixed — DD4 P0/HIGH verified defects
+
+- **CRITICAL: path-traversal in state file-name sinks** — `omcp state write "../../pwned"`
+  previously wrote `../../pwned-state.json` outside `.omcp/state/`. The same
+  exploit worked through `state_write` MCP calls with `sessionId: "../escape"`.
+  Fixed with new `src/runtime/safe-slug.ts:assertSafeSlug()` applied at every
+  sink (CLI, MCP server, runtime).
+- **State API shape mismatch** — see Added: mode_* tools above.
+- **Atomic-write gap on state JSON** — concurrent writes could corrupt the
+  on-disk JSON; closed by atomic-write helper.
+- **loop-watcher TOCTOU** — `if (exists) writeFile` race window let two
+  watchers both pass the check and clobber each other's pidfile. Fixed
+  with `openSync(pidfile, "wx")` (O_EXCL); EEXIST → check liveness → if
+  stale, unlink and retry once.
+- **Team detached worker leak** — `omcp team` in detached mode `unref()`ed
+  children without recording pids, so Ctrl+C or `omcp team stop` couldn't
+  reach them. Now writes `.omcp/state/team/<sid>/worker-<n>.pid` per worker;
+  new `stopTeam()` reads them and SIGTERMs.
+- **Cleanup test using 100% fakes** — added integration test that spawns a
+  real subprocess, waits for it to exit, writes a real-format pidfile,
+  runs `runCleanup` with no `isAlive` override, and asserts the pidfile
+  is gone. The old fake-only unit tests remain alongside.
+- **`omcp version` doc lied** — README claimed `omcp version` but the
+  commander-based CLI exposes `--version` / `-V`. Doc corrected.
+- **5 mode launchers missing from README** — self-improve, verify, debug,
+  remember, skillify exist as CLI verbs but were absent from the README
+  table. Added.
+
+### Falsified — defect claims that the adversarial fixers REJECTED
+
+- **DD4 Lane B "notepad `## priority` indexOf=-1 corruption" — FALSE.**
+  The notepad-server uses a structured `loadNotepad`/`saveNotepad` pair that
+  always seeds all three section headings; there is no indexOf splice
+  anywhere. Verified by independent reproducer.
+- **DD4 Lane E HIGH "port omc 4.14.0 ultragoal skill" — DEFERRED.**
+  omc 4.14.0 is not installable locally (only v0.2.x on npm, v4.9.3 cached).
+  v4.9.3 has no `ultragoal` skill — only `ultraqa` and `ultrawork`, both
+  already in omcp. The defect was based on a version that's not retrievable.
+- **Main agent's prior commit message lied about package.json edits.**
+  d4c5360 claimed it removed `|| true` from postinstall and dropped
+  `prompts/`/`templates/` from `files:` — git diff showed package.json was
+  never in that commit. Re-done correctly in this iteration.
+
+### Tests
+
+- 50 vitest files, **49 passing**, **323 passing tests / 2 skipped**.
+  Net +40 tests vs the v0.4.0 baseline.
+- 1 file fails with a pre-existing Windows EPERM worker-fork error in the
+  loop-watcher subprocess teardown path — present in v0.4.0 baseline,
+  unrelated to DD4 fixes, tracked separately.
+- New tests added by each fixer:
+  - F-StateMCP: +18 (atomic-write 4, mode_* tools 6, concurrency 1, slug-rejection 2, others 5)
+  - F-OmxVerbs: +24 (notepad 9, trace 7, project-memory 8)
+  - F-RaceFix: +14 (loop-watcher EEXIST 8, team-stop 5, cleanup integration 1)
+
+### Caveats (do not trust without re-checking)
+
+These are honest "I shipped this but it could bite" notes from the fixers:
+
+- `mode_write` MCP tool casts `args.payload as BaseModeState` with no deep
+  runtime shape validation. A caller passing a non-object payload reaches
+  `writeModeState` with bad data.
+- The atomic-write "no temp residue on rename failure" test is a no-op on
+  Windows because `chmodSync` silently succeeds (no read-only-dir simulation).
+- `stopTeam` on Windows uses `taskkill` but doesn't verify the child is
+  actually dead before removing the pidfile — `taskkill` can return exit 0
+  for an already-dead pid.
+- The cleanup integration test's dead-pid assumption has no guard for pid
+  reuse on Windows between `spawnSync` exit and `runCleanup`.
+- `omcp trace --limit=N` flag parsing is inline and does not handle
+  edge cases like `--limit` at end-of-args or sessionId starting with `--`.
+- `omcp project-memory write <k> <multi word json>` may silently drop tokens
+  past `rest[1]` because the dispatcher doesn't re-join.
+
 ## [0.4.0] — 2026-05-18
 
 ### Added — DD3 (deep-dive cycle 3) — omc v4.14.0 parity catch-up

@@ -54,6 +54,9 @@ import {
 } from "./commands/teleport.js";
 import { formatUninstallReport, runUninstall } from "./commands/uninstall.js";
 import { runUpdate } from "./commands/update.js";
+import { runNotepadCommand } from "./commands/notepad.js";
+import { runTraceCommand } from "./commands/trace.js";
+import { runProjectMemoryCommand } from "./commands/project-memory.js";
 
 const MODE_COMMANDS = [
   "ralph",
@@ -524,6 +527,27 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .action(async (opts: { purge?: boolean; dryRun?: boolean }) => {
       const r = await runUninstall({ purge: opts.purge, dryRun: opts.dryRun });
       console.log(formatUninstallReport(r));
+    });
+
+  program
+    .command("notepad <subcommand> [args...]")
+    .description("Notepad CLI: read | write-priority <text> | write-working <text> | write-manual <text> | prune <section> | stats")
+    .action((subcommand: string, args: string[]) => {
+      runNotepadCommand([subcommand, ...args]);
+    });
+
+  program
+    .command("trace <subcommand> [args...]")
+    .description("Trace CLI: timeline <sessionId> [--limit=N] | summary <sessionId>")
+    .action((subcommand: string, args: string[]) => {
+      runTraceCommand([subcommand, ...args]);
+    });
+
+  program
+    .command("project-memory <subcommand> [args...]")
+    .description("Project-memory CLI: read | write <key> <value-json> | add-note <text> | add-directive <text>")
+    .action((subcommand: string, args: string[]) => {
+      runProjectMemoryCommand([subcommand, ...args]);
     });
 
   program

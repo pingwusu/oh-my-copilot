@@ -129,7 +129,7 @@ Read these files at startup and at the beginning of each iteration:
     ```
     Where `{goal_slug}` is derived from the goal objective (lowercase, underscored). If the branch already exists, skip creation. Persist `goal_slug` in agent-settings.json.
 12. **Mode exclusivity**: Inspect active omcp modes (e.g. via `omcp status` or the state surface). If autopilot, ralph, or ultrawork is active, refuse to start.
-13. Write initial state: `state_write(mode='self-improve', active=true, iteration=0, started_at=<now>)`.
+13. Write initial state: `mode_write(mode='self-improve', payload={active: true, iteration: 0, started_at: <now>})`.
 
 ---
 
@@ -158,7 +158,7 @@ All git operations happen inside the target repo, NOT in the omcp project root.
 
 **Gate**: All settings must be true. Once the gate passes, execute continuously without stopping.
 
-Update `state_write(mode='self-improve', active=true, status="running")`.
+Update `mode_write(mode='self-improve', payload={active: true, status: "running"})`.
 
 ### Step 0 — Stale Worktree Cleanup (mandatory, runs every iteration)
 
@@ -171,11 +171,11 @@ Update `state_write(mode='self-improve', active=true, status="running")`.
 
 ### Step 1 — Refresh State
 
-`state_write(mode='self-improve', active=true, iteration=N)` to reset 30min TTL.
+`mode_write(mode='self-improve', payload={active: true, iteration: N})` to reset 30min TTL.
 
 ### Step 2 — Check Stop Request
 
-Read state via `state_read(mode='self-improve')`.
+Read state via `mode_read(mode='self-improve')`.
 
 If state is cleared (cancel was invoked) OR status is `user_stopped`:
   a. Set `status: "user_stopped"` in `<self-improve-root>/state/agent-settings.json`

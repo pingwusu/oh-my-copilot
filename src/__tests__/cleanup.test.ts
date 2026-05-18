@@ -181,4 +181,33 @@ describe("runCleanup", () => {
     expect(report.items).toHaveLength(0);
     expect(report.removed).toHaveLength(0);
   });
+
+  it("integration: real dead-process pidfile is cleaned up without mocks", async () => {
+    // Spawn a real child process, wait for it to exit, then confirm cleanup
+    // removes its pidfile using the REAL defaultIsAlive probe (no isAlive mock).
+    const { spawnSync } = await import("node:child_process");
+
+    // Spawn a no-op process and capture its pid.
+    const child = spawnSync(process.execPath, ["-e", "process.exit(0)"], {
+      encoding: "utf8",
+    });
+    // child.pid is the pid of the synchronous child — it is already dead.
+    const deadPid = child.pid;
+    if (deadPid === undefined || deadPid === null) return; // skip if spawn failed
+
+    const pidPath = join(cwd, ".omcp", "state", "loop-watcher.pid");
+    mkdirSync(join(cwd, ".omcp", "state"), { recursive: true });
+    // Write a REAL pidfile in the format loop-watcher uses: bare "<pid>".
+    writeFileSync(pidPath, String(deadPid));
+
+    // Call runCleanup with NO isAlive override — uses the real process.kill(pid,0) probe.
+    const { runCleanup } = await import("../cli/commands/cleanup.js");
+    const report = runCleanup({ cwd, tmpRoot: fakeTmp });
+
+    // The pidfile for the dead process must be cleaned up.
+    expect(report.items.some((i) => i.kind === "loop-watcher-pidfile")).toBe(true);
+    expect(existsSync(pidPath)).toBe(false);
+    expect(report.errors).toHaveLength(0);
+  });
 });
+
