@@ -19,3 +19,4 @@ Cargo.lock.bak
 # IDE
 .vscode/
 .idea/
+.tmp-upstream-wiki/
