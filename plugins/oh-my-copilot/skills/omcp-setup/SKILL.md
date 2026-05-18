@@ -78,7 +78,7 @@ EXAMPLES:
   /oh-my-copilot:omcp-setup --global    # Update all projects
   /oh-my-copilot:omcp-setup --force     # Re-run full setup wizard
 
-For more info: https://github.com/Yeachan-Heo/oh-my-claudecode
+For more info: https://github.com/<TODO-omcp-org>/oh-my-copilot
 ```
 
 ## Pre-Setup Check: Already Configured?

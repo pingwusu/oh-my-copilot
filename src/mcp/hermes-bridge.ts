@@ -21,6 +21,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, relative } from "node:path";
+import { atomicWriteFileSync } from "../runtime/atomic-write.js";
 
 export type HermesMode = "tmux" | "detached";
 
@@ -91,7 +92,7 @@ function readMeta(sessionId: string): HermesSessionMeta | null {
 
 function writeMeta(meta: HermesSessionMeta): void {
   mkdirSync(sessionDir(meta.sessionId), { recursive: true });
-  writeFileSync(metaPath(meta.sessionId), JSON.stringify(meta, null, 2));
+  atomicWriteFileSync(metaPath(meta.sessionId), JSON.stringify(meta, null, 2));
 }
 
 export function tmuxAvailable(): boolean {

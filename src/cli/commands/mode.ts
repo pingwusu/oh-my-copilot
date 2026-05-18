@@ -9,7 +9,8 @@
 
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import { join } from "node:path";
 import { loadConfig } from "../../notifications/config-loader.js";
 import { dispatch } from "../../notifications/dispatcher.js";
@@ -177,7 +178,7 @@ export function runCancel(reason?: string): { path: string } {
   const dir = join(process.cwd(), ".omcp", "state");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "cancel.json");
-  writeFileSync(
+  atomicWriteFileSync(
     path,
     JSON.stringify(
       {
@@ -205,6 +206,6 @@ export function runNote(text: string): { path: string } {
   const after = existing.slice(insertAt + "## priority".length);
   const head = existing.slice(0, insertAt + "## priority".length);
   const next = `${head}\n${text}${after}`;
-  writeFileSync(file, next);
+  atomicWriteFileSync(file, next);
   return { path: file };
 }

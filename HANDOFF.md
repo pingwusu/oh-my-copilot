@@ -1,10 +1,10 @@
 # omcp 续接 handoff
 
-**Updated 2026-05-18 21:30**. 上一个 session 的 ralph 循环已推进到 **DD5 完成 + v0.6.0 released** (commit `8a56a8a`)。这份 handoff 写给下一次开新 session 时接手 — 直接 `cat HANDOFF.md` 给主 agent 就够。
+**Updated 2026-05-18 23:50**. 上一个 session 的 ralph 循环已推进到 **DD8 完成 + v0.7.0 released**。这份 handoff 写给下一次开新 session 时接手 — 直接 `cat HANDOFF.md` 给主 agent 就够。
 
 ## 一句话当前状态
 
-omcp **v0.6.0** released (`8a56a8a`)。Working tree **干净**。DD5 critic 一轮在 v0.5.0 上抓到 2 P0 + 1 P1 + 3 vacuous test + 1 误判 (ultragoal 实际在 omx 里有) — **全部已修 + 已 commit**。Build clean,test **51 files / 50 passing files / 337 tests passing / 2 skipped / 1 pre-existing Windows EPERM**。Catalog 19 agents / **41 skills** (+ultragoal)。
+omcp **v0.7.0** released。Working tree **干净**(commit pending in this session)。DD8 一轮 4 个独立上下文 critic 在 v0.6.0 上抓到 **2 P0 + 4 P1 + 3 SKILL URL bug** — 全部已修+regression test。Critic-B 78s 后 truncate 中途退出,主 agent 手动算出 omx CLI/skill gap list 已写入 CHANGELOG (DD9 to-port queue)。Build clean,test 54 files / 53 passing (1 worker-fork EPERM crash leaves 8 tests uncounted — 同 v0.5.0+ baseline)。Catalog **19 agents / 41 skills** (与 v0.6.0 一致;DD8 全部是 fix 不是新 surface)。
 
 ## 工作目录 / 关键路径
 

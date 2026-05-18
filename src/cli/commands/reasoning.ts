@@ -4,8 +4,9 @@
 // Levels: low | medium | high | xhigh (matches Copilot CLI's --effort enum).
 // Persists to ~/.copilot/.omcp-config.json under `reasoning.effort`.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import { resolvePaths } from "../../runtime/paths.js";
 
 export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
@@ -46,7 +47,7 @@ export function writeReasoning(level: ReasoningLevel): { path: string } {
   const reasoning = (existing.reasoning ?? {}) as Record<string, unknown>;
   reasoning.effort = level;
   existing.reasoning = reasoning;
-  writeFileSync(f, JSON.stringify(existing, null, 2));
+  atomicWriteFileSync(f, JSON.stringify(existing, null, 2));
   return { path: f };
 }
 
@@ -59,7 +60,7 @@ export function clearReasoning(): { path: string; cleared: boolean } {
       unknown
     >;
     delete existing.reasoning;
-    writeFileSync(f, JSON.stringify(existing, null, 2));
+    atomicWriteFileSync(f, JSON.stringify(existing, null, 2));
     return { path: f, cleared: true };
   } catch {
     return { path: f, cleared: false };

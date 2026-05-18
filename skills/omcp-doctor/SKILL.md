@@ -176,11 +176,7 @@ node -e "const p=require('path'),f=require('fs'),h=require('os').homedir(),d=pro
 ```
 
 ### Fix: Missing/Outdated AGENTS.md
-Fetch latest from GitHub and write to `~/.copilot/AGENTS.md`. Use shell `curl` or `gh` since WebFetch is not available in Copilot CLI:
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/Yeachan-Heo/oh-my-claudecode/main/docs/CLAUDE.md" -o ~/.copilot/AGENTS.md
-```
+Create `~/.copilot/AGENTS.md` manually using the bundled template at `templates/AGENTS.md` in the oh-my-copilot repo, or refer to the project docs for the recommended content. (No remote fetch — omcp does not host a raw AGENTS.md template URL yet.)
 
 ### Fix: Legacy Curl-Installed Content
 

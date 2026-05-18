@@ -149,10 +149,22 @@ export function stopTeam(
       if (Number.isFinite(pid) && pid > 0) {
         try {
           killProcess(pid);
-          killed.push(pid);
         } catch (err) {
           errors.push(`kill ${pid}: ${(err as Error).message}`);
+          // pidfile left intact so user can retry after fixing the underlying
+          // issue (access denied, zombie process, etc.).
+          continue;
         }
+        // DD8 Critic-A P1 fix: verify the process actually died before
+        // claiming success and deleting the pidfile. Without this, a failed
+        // taskkill (Win) or SIGTERM (POSIX) silently orphans the worker
+        // AND removes the only mechanism to stop it later.
+        if (isProcessAlive(pid, 600)) {
+          errors.push(`kill ${pid}: process still alive after kill signal`);
+          // Leave pidfile intact.
+          continue;
+        }
+        killed.push(pid);
       }
       unlinkSync(pidPath);
     } catch (err) {
@@ -161,4 +173,31 @@ export function stopTeam(
   }
 
   return { sessionId, killed, errors };
+}
+
+// DD8: short busy-poll for process termination. Bounded by deadlineMs.
+// Returns true if the pid is still alive after the deadline, false if it died.
+function isProcessAlive(pid: number, deadlineMs: number): boolean {
+  const deadline = Date.now() + deadlineMs;
+  while (Date.now() < deadline) {
+    try {
+      // `process.kill(pid, 0)` throws ESRCH if the process is gone.
+      // On Windows this is implemented via libuv and is reliable enough.
+      process.kill(pid, 0);
+    } catch {
+      return false;
+    }
+    // ~30ms spin between checks. Acceptable: stopTeam is rare and synchronous.
+    const spinUntil = Date.now() + 30;
+    while (Date.now() < spinUntil) {
+      // intentional busy wait — keeps the loop synchronous.
+    }
+  }
+  // Final attempt.
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }

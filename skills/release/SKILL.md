@@ -61,7 +61,7 @@ gh release create v<version> --title "v<version> - <title>" --notes "<release no
 
 ### 7. Verify
 - [ ] npm: https://www.npmjs.com/package/oh-my-copilot
-- [ ] GitHub: https://github.com/Yeachan-Heo/oh-my-claudecode/releases
+- [ ] GitHub: https://github.com/<TODO-omcp-org>/oh-my-copilot/releases
 
 ## Version Files Reference
 

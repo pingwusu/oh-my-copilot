@@ -1,8 +1,9 @@
 // Read/merge/write ~/.copilot/config.json and mcp-config.json safely.
 // We never overwrite unrelated keys; we only add/refresh the omcp plugin entry.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
 
 export interface InstalledPlugin {
   name: string;
@@ -32,7 +33,7 @@ export function readJsonOrDefault<T>(path: string, fallback: T): T {
 
 export function writeJson(path: string, data: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  atomicWriteFileSync(path, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 export function upsertOmcpPlugin(

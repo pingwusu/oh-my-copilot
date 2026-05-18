@@ -8,8 +8,9 @@
 //     as opaque JSON blobs (no snapshot reconciliation against Copilot internals)
 
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { atomicWriteFileSync } from "../runtime/atomic-write.js";
 
 export const ULTRAGOAL_DIR = ".omcp/ultragoal";
 export const ULTRAGOAL_BRIEF = "brief.md";
@@ -239,7 +240,9 @@ export async function readUltragoalPlan(cwd: string): Promise<UltragoalPlan> {
 
 async function writePlan(cwd: string, plan: UltragoalPlan): Promise<void> {
   await mkdir(ultragoalDir(cwd), { recursive: true });
-  await writeFile(
+  // DD8 Critic-A P1 fix: previously used fs/promises.writeFile (non-atomic).
+  // A crash mid-write bricked goals.json and the entire ultragoal workflow.
+  atomicWriteFileSync(
     ultragoalGoalsPath(cwd),
     `${JSON.stringify(plan, null, 2)}\n`,
   );
@@ -300,12 +303,12 @@ export async function createUltragoalPlan(
   }
 
   await mkdir(ultragoalDir(cwd), { recursive: true });
-  await writeFile(
+  atomicWriteFileSync(
     ultragoalBriefPath(cwd),
     options.brief.endsWith("\n") ? options.brief : `${options.brief}\n`,
   );
   await writePlan(cwd, plan);
-  await writeFile(ultragoalLedgerPath(cwd), "");
+  atomicWriteFileSync(ultragoalLedgerPath(cwd), "");
   await appendLedger(cwd, {
     ts: now,
     event: "plan_created",

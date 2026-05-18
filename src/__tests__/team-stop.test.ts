@@ -54,7 +54,11 @@ describe("stopTeam", () => {
     expect(report.errors).toHaveLength(0);
   });
 
-  it("records error (does not throw) when killProcess fails", () => {
+  it("records error (does not throw) when killProcess fails and KEEPS pidfile for retry", () => {
+    // DD8 Critic-A P1 fix: prior behavior unconditionally deleted the
+    // pidfile even when kill threw, orphaning the worker permanently. The
+    // fix keeps the pidfile when the kill signal cannot be delivered so
+    // the user can retry after fixing the underlying issue (EPERM, etc.).
     const sessionId = "fail-session";
     const pidDir = join(tmp, ".omcp", "state", "team", sessionId);
     mkdirSync(pidDir, { recursive: true });
@@ -67,8 +71,8 @@ describe("stopTeam", () => {
     expect(report.killed).toHaveLength(0);
     expect(report.errors.length).toBeGreaterThan(0);
     expect(report.errors[0]).toMatch(/3333/);
-    // Pidfile should still be removed even when kill fails.
-    expect(existsSync(join(pidDir, "worker-1.pid"))).toBe(false);
+    // Pidfile must NOT be removed when kill fails (retry path).
+    expect(existsSync(join(pidDir, "worker-1.pid"))).toBe(true);
   });
 
   it("ignores non-.pid files in pidDir", () => {

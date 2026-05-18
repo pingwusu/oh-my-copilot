@@ -59,7 +59,7 @@ class McpClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`timeout waiting for ${method}`));
-      }, 5000);
+      }, 25000);
       this.pending.set(id, (msg) => {
         clearTimeout(timer);
         resolve(msg);

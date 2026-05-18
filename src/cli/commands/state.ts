@@ -22,6 +22,9 @@ function stateRoot(): string {
   const sessionId = process.env.COPILOT_SESSION_ID;
   const base = join(process.cwd(), ".omcp", "state");
   if (sessionId && sessionId.trim().length > 0) {
+    // DD8 Critic-A P0 fix: COPILOT_SESSION_ID reached path.join unvalidated.
+    // A malicious env var like "../../tmp/evil" would write outside .omcp/.
+    assertSafeSlug(sessionId, "sessionId");
     return join(base, "sessions", sessionId);
   }
   return base;

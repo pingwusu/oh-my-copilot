@@ -2,9 +2,8 @@
 // Path resolution: OMCP_TRACE_ROOT env var overrides the default, so tests
 // can isolate to a tmp directory without polluting .omcp/.
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFileSync } from "./atomic-write.js";
 import { assertSafeSlug } from "./safe-slug.js";
 
 export interface TraceEvent {
@@ -37,8 +36,13 @@ export function loadTrace(sessionId: string, root?: string): TraceEvent[] {
 export function appendTrace(sessionId: string, ev: TraceEvent, root?: string): void {
   const p = traceFile(sessionId, root);
   mkdirSync(dirname(p), { recursive: true });
-  const existing = existsSync(p) ? readFileSync(p, "utf8") : "";
-  atomicWriteFileSync(p, existing + JSON.stringify(ev) + "\n");
+  // DD8 Critic-A P0 fix: previous read-modify-write loses events under
+  // concurrent appendTrace calls (Writer A and B both read N events, each
+  // writes N+1, second write silently overwrites first). The trace file is
+  // JSONL — use appendFileSync for OS-level atomic append. POSIX guarantees
+  // atomicity for writes ≤ PIPE_BUF; on NTFS single-call writes are atomic
+  // for small payloads (well under 4KB).
+  appendFileSync(p, `${JSON.stringify(ev)}\n`);
 }
 
 export function traceAppend(
