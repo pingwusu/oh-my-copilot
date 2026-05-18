@@ -106,7 +106,17 @@ function readNote(cwd) {
 }
 
 function buildLine({ family, modes, ralph, team, note }) {
-  const parts = ["omcp", family, modes, ralph, team, note];
+  // Legacy 6-slot contract; render empty slots as "-" so the user-facing
+  // line stays scannable (DD3 Lane B fix).
+  const dash = (s) => (s && s.length > 0 ? s : "-");
+  const parts = [
+    "omcp",
+    family,
+    dash(modes),
+    dash(ralph),
+    dash(team),
+    dash(note),
+  ];
   return parts.join(" · ");
 }
 

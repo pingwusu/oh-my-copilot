@@ -439,12 +439,12 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     });
 
   program
-    .command("teleport <issueRef>")
+    .command("teleport [issueRef]")
     .description("Create a git worktree for an issue under ~/Workspace/omcp-worktrees/")
     .option("--list", "list existing teleport worktrees")
     .option("--remove <slug>", "remove a teleport worktree by slug")
     .option("--no-tmux", "skip tmux launch")
-    .action((issueRef: string, opts: { list?: boolean; remove?: string; tmux?: boolean }) => {
+    .action((issueRef: string | undefined, opts: { list?: boolean; remove?: string; tmux?: boolean }) => {
       if (opts.list) { console.log(formatTeleportList(listTeleports())); return; }
       if (opts.remove) {
         const r = removeTeleport(opts.remove);
@@ -452,6 +452,11 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           ? `omcp teleport: removed ${opts.remove} (${r.path})`
           : `omcp teleport: remove failed — ${r.error}`);
         process.exitCode = r.ok ? 0 : 1;
+        return;
+      }
+      if (!issueRef) {
+        console.error("omcp teleport: <issueRef> is required (or pass --list / --remove <slug>)");
+        process.exitCode = 2;
         return;
       }
       const result = runTeleport(issueRef, { noTmux: opts.tmux === false });

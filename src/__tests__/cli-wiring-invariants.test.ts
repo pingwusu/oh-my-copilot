@@ -159,4 +159,33 @@ describe("CLI wiring invariants", () => {
       statSync(join(ROOT, "scripts", "omcp-loop-watcher.mjs")).isFile(),
     ).toBe(true);
   });
+
+  // DD3-A regression guard: setup.ts SOURCE_ROOTS and
+  // sync-plugin-mirror.ts DIR_SOURCES drifted in the past (scripts/ went
+  // missing from SOURCE_ROOTS). Force them to stay in lockstep.
+  it("setup.ts SOURCE_ROOTS matches sync-plugin-mirror.ts DIR_SOURCES", () => {
+    const setupText = readFileSync(
+      join(ROOT, "src", "cli", "commands", "setup.ts"),
+      "utf8",
+    );
+    const mirrorText = readFileSync(
+      join(ROOT, "src", "scripts", "sync-plugin-mirror.ts"),
+      "utf8",
+    );
+    const setupMatch = setupText.match(
+      /const\s+SOURCE_ROOTS\s*=\s*\[([\s\S]*?)\]/,
+    );
+    const mirrorMatch = mirrorText.match(
+      /const\s+DIR_SOURCES\s*=\s*\[([\s\S]*?)\]/,
+    );
+    expect(setupMatch, "setup.ts must declare SOURCE_ROOTS").toBeTruthy();
+    expect(mirrorMatch, "sync-plugin-mirror.ts must declare DIR_SOURCES").toBeTruthy();
+
+    const parse = (body: string): string[] =>
+      (body.match(/"([^"]+)"/g) ?? []).map((s) => s.slice(1, -1)).sort();
+
+    const setupArr = parse(setupMatch![1]);
+    const mirrorArr = parse(mirrorMatch![1]);
+    expect(setupArr).toEqual(mirrorArr);
+  });
 });

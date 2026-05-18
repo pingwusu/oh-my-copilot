@@ -1,9 +1,40 @@
-// Reference PostToolUse hook: increments an advisory counter in the per-session
-// state file under .omcp/state/. Write-only — never blocks tool execution.
+// Reference PostToolUse hook bundled with the plugin install.
+// Self-contained — no imports from ../src/ or ../dist/, so the file resolves
+// cleanly inside ~/.copilot/installed-plugins/oh-my-copilot/oh-my-copilot/hooks/.
+//
+// Increments an advisory counter in .omcp/state/<sessionId>-counters.json.
+// Write-only — never blocks tool execution; swallows all errors to stderr.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Hook, HookContext, HookResult } from "../src/hooks/hook-types.js";
+
+type HookEvent =
+  | "PreToolUse"
+  | "PostToolUse"
+  | "PreSubmit"
+  | "PostSubmit"
+  | "SessionStart"
+  | "PreEnd";
+
+interface HookContext {
+  event: HookEvent;
+  toolName?: string;
+  toolArgs?: unknown;
+  toolResult?: unknown;
+  sessionId: string;
+  cwd: string;
+}
+
+type HookResult =
+  | { kind: "noop" }
+  | { kind: "advise"; text: string }
+  | { kind: "block"; reason: string };
+
+interface Hook {
+  name: string;
+  events: HookEvent[];
+  run(ctx: HookContext): Promise<HookResult>;
+}
 
 interface CounterFile {
   toolCalls?: number;

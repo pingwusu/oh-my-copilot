@@ -73,14 +73,18 @@ const OPTIONAL_ELEMENTS: HudElement[] = [
  * Additional rich segments follow when non-null state is available.
  */
 export function renderHud(state: HudState): string {
-  // Legacy segment block — always emitted (empty string is fine).
+  // Legacy 6-segment block — `omcp` + family always present; remaining
+  // positional slots collapse to `-` when empty (avoids the user-facing
+  // "omcp · claude ·  ·  ·  · " look noted in DD3 Lane B). The 6-column
+  // contract is preserved (legacy tests assert parts.length >= 6).
+  const dash = (s: string): string => (s.length > 0 ? s : "-");
   const legacy = [
     "omcp",
     renderFamily(state),
-    renderModes(state),
-    renderRalphLegacy(state),
-    renderTeamLegacy(state),
-    renderNotepadPriority(state) ?? "",
+    dash(renderModes(state)),
+    dash(renderRalphLegacy(state)),
+    dash(renderTeamLegacy(state)),
+    dash(renderNotepadPriority(state) ?? ""),
   ];
 
   const rich: string[] = [];

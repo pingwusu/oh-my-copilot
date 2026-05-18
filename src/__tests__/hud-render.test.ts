@@ -47,10 +47,11 @@ describe("renderHud — element composition", () => {
     expect(parts.length).toBeGreaterThanOrEqual(6);
     expect(parts[0]).toBe("omcp");
     expect(parts[1]).toBe("claude");
-    expect(parts[2]).toBe(""); // no active modes
-    expect(parts[3]).toBe(""); // no ralph iter/max
-    expect(parts[4]).toBe(""); // no team done/spawned
-    expect(parts[5]).toBe(""); // no priority note
+    // Legacy slots collapse to "-" when their data source is empty (DD3 fix).
+    expect(parts[2]).toBe("-"); // no active modes
+    expect(parts[3]).toBe("-"); // no ralph iter/max
+    expect(parts[4]).toBe("-"); // no team done/spawned
+    expect(parts[5]).toBe("-"); // no priority note
   });
 
   it("renders ralph element when state is active", () => {

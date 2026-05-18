@@ -27,12 +27,17 @@ import { resolvePaths } from "../../runtime/paths.js";
 // `force` is accepted for forward-compat with a future "fail if already
 // installed" mode; today setup is always a refresh.
 
+// Source-of-truth for what omcp setup mirrors into ~/.copilot/installed-plugins/.
+// Kept in sync with src/scripts/sync-plugin-mirror.ts:DIR_SOURCES; an invariant
+// test in src/__tests__/cli-wiring-invariants.test.ts enforces parity so the
+// two arrays can never silently desync again (DD3-A regression).
 const SOURCE_ROOTS = [
   "agents",
   "skills",
   "prompts",
   "templates",
   "hooks",
+  "scripts",
   "dist",
   ".claude-plugin",
 ];
