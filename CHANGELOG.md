@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-18
+
 ## [0.3.0] — 2026-05-17
 
 ### Added — DD2 (deep-dive cycle 2) — full omc/omx parity push
