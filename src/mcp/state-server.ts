@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { assertSafeSlug } from "../runtime/safe-slug.js";
 
 export interface StateStore {
   read(sessionId: string, key: string): string | undefined;
@@ -27,6 +28,9 @@ export class FileStateStore implements StateStore {
   }
 
   private sessionFile(sessionId: string): string {
+    // DD4 Lane B fix: reject path-traversal — sessionId may be MCP-client-
+    // supplied and could escape this.root via "../..".
+    assertSafeSlug(sessionId, "sessionId");
     return join(this.root, `${sessionId}.json`);
   }
 

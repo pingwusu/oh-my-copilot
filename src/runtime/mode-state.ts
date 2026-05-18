@@ -14,6 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { assertSafeSlug } from "./safe-slug.js";
 
 export type ModeName =
   | "ralph"
@@ -89,6 +90,13 @@ function stateRoot(sessionId?: string): string {
 }
 
 function modeFile(mode: ModeName, sessionId?: string): string {
+  // DD4 Lane B fix: ModeName is a typed enum and sessionId is validated via
+  // resolveSessionRoot, but defense-in-depth — refuse any callers that
+  // bypass typing.
+  assertSafeSlug(mode, "mode");
+  if (sessionId !== undefined && sessionId !== "") {
+    assertSafeSlug(sessionId, "sessionId");
+  }
   return join(stateRoot(sessionId), `${mode}-state.json`);
 }
 

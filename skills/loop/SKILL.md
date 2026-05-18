@@ -18,7 +18,7 @@ The `loop` skill registers a recurring task with the `omcp-loop` MCP server. A
 companion watcher process (`scripts/omcp-loop-watcher.mjs`) polls the queue
 and spawns `copilot -p "<prompt>" --allow-all-tools` for any due entry.
 
-This mirrors omc's `/loop` skill (which uses Claude Code's `ScheduleWakeup`
+This mirrors omc's `/loop` skill (which uses Claude Code's scheduled-wakeup primitive
 tool). Copilot CLI has no equivalent built-in tool, so omcp implements it
 with: an MCP scheduling server (in-session API) + an external watcher
 daemon (out-of-session executor).

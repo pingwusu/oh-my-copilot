@@ -16,6 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { assertSafeSlug } from "../../runtime/safe-slug.js";
 
 function stateRoot(): string {
   const sessionId = process.env.COPILOT_SESSION_ID;
@@ -27,6 +28,8 @@ function stateRoot(): string {
 }
 
 function modeFile(mode: string): string {
+  // DD4 Lane B fix: reject path-traversal in `mode`.
+  assertSafeSlug(mode, "mode");
   return join(stateRoot(), `${mode}-state.json`);
 }
 

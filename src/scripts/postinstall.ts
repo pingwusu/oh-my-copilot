@@ -46,10 +46,16 @@ function main(): void {
     return;
   }
 
-  process.stdout.write("omcp postinstall: running `omcp setup --force`...\n");
-  const r = spawnSync("omcp", ["setup", "--force"], {
+  // Invoke `node <here>/../cli/omcp.js setup --force` directly rather than
+  // the `omcp` shim — global npm bin may not be on PATH yet when postinstall
+  // fires (DD4 Lane C P1).
+  const here = import.meta.dirname ?? __dirname;
+  const cliPath = join(here, "..", "cli", "omcp.js");
+  process.stdout.write(
+    `omcp postinstall: running \`node ${cliPath} setup --force\`...\n`,
+  );
+  const r = spawnSync(process.execPath, [cliPath, "setup", "--force"], {
     stdio: "inherit",
-    shell: process.platform === "win32",
   });
   if ((r.status ?? 1) === 0) {
     process.stdout.write("omcp postinstall: complete\n");

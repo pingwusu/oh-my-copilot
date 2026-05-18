@@ -935,7 +935,7 @@ Offer to send a test notification with the new template.
 
 ## Related
 
-- `/oh-my-copilot:configure-openclaw` — Configure OpenClaw gateway integration
+- (configure-openclaw is omc-only and does not have a Copilot equivalent)
 
 ---
 

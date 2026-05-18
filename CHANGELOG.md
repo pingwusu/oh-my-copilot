@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.4.0] — 2026-05-18
 
+### Added — DD3 (deep-dive cycle 3) — omc v4.14.0 parity catch-up
+
+**+1 MCP server (now 8 total): `omcp-wiki`**
+
+- LLM Wiki knowledge base server (Karpathy KB model). Tools: `wiki_ingest`,
+  `wiki_query`, `wiki_lint`, `wiki_add`, `wiki_list`, `wiki_read`, `wiki_delete`.
+  Backed by `.omcp/wiki/*.md` with auto-maintained index and atomic-write
+  storage layer (CJK-safe slug fallback, reserved-filename guard,
+  path-traversal guard).
+
+**+6 skills (now 39 total) ported from omc v4.14.0**:
+
+- `wiki` — KB curation surface for the omcp-wiki MCP server
+- `self-improve` — level-4 evolutionary tournament loop (flagship feature)
+- `verify` — completion-gate skill (run before claiming done)
+- `debug` — diagnose session/repo runtime state
+- `remember` — review reusable project knowledge
+- `skillify` — alias for `/oh-my-copilot:learner` (omc v4.14.0 surface name)
+
+**+1 hook**: `src/hooks/background-notifications.ts` — detached child-process
+notification dispatcher (keeps hook stdout JSON-clean, prevents flake).
+Bundled reference at `hooks/post-tool-background-notify.ts`.
+
+**+5 mode-launcher CLI verbs**: `omcp self-improve "task"`, `omcp verify ...`,
+`omcp debug ...`, `omcp remember ...`, `omcp skillify ...`.
+
+**+1 doctor check**: `omcp doctor-team-routing` — verifies `copilot` CLI on
+PATH, tmux presence (warn if missing), and mode-state mutual exclusion via
+`canStartMode`. Invoked automatically by `omcp doctor`.
+
+### Fixed — DD3 critic findings
+
+- **Lane A silent revert** — `setup.ts:SOURCE_ROOTS` had lost `"scripts"`
+  while `sync-plugin-mirror.ts:DIR_SOURCES` still had it. Fresh installs
+  wouldn't refresh `~/.copilot/.../scripts/` on upgrade. Re-added + invariant
+  test now enforces SOURCE_ROOTS === DIR_SOURCES lockstep.
+- **Lane B user-flow bugs (4)**:
+  - `omcp teleport --list` required positional `<issueRef>` — changed to `[issueRef]`
+  - Bundled hooks imported from `../src/hooks/...` (missing in install cache) — rewrote both reference hooks as self-contained
+  - `omcp hud` showed empty slots `omcp · claude ·  ·  ·  · ` — render empty legacy slots as `-` in both `scripts/omcp-hud.mjs` and `src/hud/render.ts`
+  - `omcp mcp-serve <unknown>` printed raw Node stack — wrap `resolveMcpServer` in try/catch in the CLI dispatcher
+
+### Test totals
+
+- 44 vitest files, **283 passing / 2 skipped / 0 failed** (was 250)
+- 23 smoke-e2e assertions OK
+- verify-catalog clean (19 agents, 39 skills; subfile scan included)
+- verify-plugin-bundle in sync
+- `copilot plugin list` shows oh-my-copilot v0.4.0
+- `copilot mcp list` shows all **8** omcp MCP servers as workspace-scoped
+
 ## [0.3.0] — 2026-05-17
 
 ### Added — DD2 (deep-dive cycle 2) — full omc/omx parity push

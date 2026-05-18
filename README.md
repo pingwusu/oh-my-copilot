@@ -105,6 +105,7 @@ Inside Copilot, invoke skills via:
 | `omcp-loop`          | loop_schedule/list_pending/check_due/cancel/cancel_all/mark_fired |
 | `omcp-code-intel`    | lsp_diagnostics(_directory), lsp_*, ast_grep_search/replace |
 | `omcp-hermes`        | hermes_start_session/send_prompt/read_status/read_tail/list_artifacts/kill_session/list_sessions |
+| `omcp-wiki`          | wiki_ingest/query/lint/add/list/read/delete — LLM Wiki KB backed by `.omcp/wiki/*.md` |
 
 ## Layout
 
