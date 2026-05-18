@@ -34,6 +34,7 @@ export const OMCP_MCP_SERVER_KEYS = [
   "omcp-loop",
   "omcp-code-intel",
   "omcp-hermes",
+  "omcp-wiki",
 ] as const;
 
 export interface UninstallOptions {

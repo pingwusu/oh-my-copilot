@@ -10,6 +10,7 @@ import {
   readJsonOrDefault,
 } from "../../runtime/copilot-config.js";
 import { resolvePaths } from "../../runtime/paths.js";
+import { probeTeamModeState } from "./doctor-team-routing.js";
 
 export type CheckLevel = "ok" | "warn" | "fail";
 
@@ -134,6 +135,25 @@ export function runDoctor(): CheckResult[] {
       name: "hook wiring",
       level: "warn",
       detail: "config.json not present — run `omcp setup` to wire hooks",
+    });
+  }
+
+  // 8. team-routing sub-check (fast path) — only inspects mode-state on disk
+  // so the base doctor stays exec-free. Run `omcp doctor team-routing` for the
+  // full report with binary probes (copilot, tmux).
+  try {
+    for (const probe of probeTeamModeState()) {
+      checks.push({
+        name: `team: ${probe.name}`,
+        level: probe.level,
+        detail: probe.detail,
+      });
+    }
+  } catch (err) {
+    checks.push({
+      name: "team: routing probe",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
     });
   }
 

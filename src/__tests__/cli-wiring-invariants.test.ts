@@ -13,20 +13,46 @@ function readOmcpCli(): string {
 }
 
 describe("CLI wiring invariants", () => {
-  it("every src/cli/commands/*.ts is imported by src/cli/omcp.ts", () => {
-    const cliText = readOmcpCli();
+  it("every src/cli/commands/*.ts is reachable from omcp.ts (directly or via another command)", () => {
     const commandsDir = join(ROOT, "src", "cli", "commands");
     const files = readdirSync(commandsDir).filter(
       (f) => f.endsWith(".ts") && !f.endsWith(".d.ts"),
     );
-    const orphans = files.filter((f) => {
+
+    // Build the set of reachable modules: start from omcp.ts, BFS through
+    // any `./commands/<name>.js` / `./<name>.js` imports inside commands/*.
+    const reachable = new Set<string>();
+    const cliText = readOmcpCli();
+    for (const f of files) {
       const moduleName = f.replace(/\.ts$/, "");
-      const importPath = `./commands/${moduleName}.js`;
-      return !cliText.includes(importPath);
-    });
+      if (cliText.includes(`./commands/${moduleName}.js`)) {
+        reachable.add(moduleName);
+      }
+    }
+    // Sub-helpers: a command is wired if some already-reachable command
+    // imports it (i.e. `import ... from "./<sibling>.js"`).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const root of reachable) {
+        const text = readFileSync(join(commandsDir, `${root}.ts`), "utf8");
+        for (const f of files) {
+          const moduleName = f.replace(/\.ts$/, "");
+          if (reachable.has(moduleName)) continue;
+          if (text.includes(`"./${moduleName}.js"`)) {
+            reachable.add(moduleName);
+            changed = true;
+          }
+        }
+      }
+    }
+
+    const orphans = files
+      .map((f) => f.replace(/\.ts$/, ""))
+      .filter((name) => !reachable.has(name));
     if (orphans.length > 0) {
       console.error(
-        "Orphaned command modules (file exists but never imported by omcp.ts):\n  " +
+        "Orphaned command modules (not reachable from omcp.ts even through sibling commands):\n  " +
           orphans.join("\n  "),
       );
     }

@@ -34,6 +34,11 @@
       "command": "node",
       "args": ["${PLUGIN_ROOT}/dist/mcp/hermes-server.js"],
       "description": "Session-coordination dispatcher (hermes_start_session/send_prompt/read_status/read_tail/list_artifacts/kill_session/list_sessions). tmux-first, detached fallback."
+    },
+    "omcp-wiki": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/wiki-server.js"],
+      "description": "LLM Wiki knowledge base (wiki_ingest/query/lint/add/list/read/delete). Backed by .omcp/wiki/*.md with auto-maintained index."
     }
   }
 }

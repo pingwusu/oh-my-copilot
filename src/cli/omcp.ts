@@ -14,6 +14,7 @@ import {
   formatChecks,
   runDoctor,
 } from "./commands/doctor.js";
+import { doctorTeamRoutingCommand } from "./commands/doctor-team-routing.js";
 import { runExec } from "./commands/exec.js";
 import { formatInfo, readInfo } from "./commands/info.js";
 import { runLaunch } from "./commands/launch.js";
@@ -70,6 +71,11 @@ const MODE_COMMANDS = [
   "ai-slop-cleaner",
   "visual-verdict",
   "autoresearch",
+  "self-improve",
+  "verify",
+  "debug",
+  "remember",
+  "skillify",
 ] as const;
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -121,6 +127,17 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       const checks = runDoctor();
       console.log(formatChecks(checks));
       process.exitCode = exitCodeFor(checks);
+    });
+
+  program
+    .command("doctor-team-routing")
+    .description(
+      "Full team-routing diagnostics: probe copilot/tmux on PATH + mode-state conflicts",
+    )
+    .option("--json", "emit JSON instead of human-readable output")
+    .action(async (opts: { json?: boolean }) => {
+      const code = await doctorTeamRoutingCommand({ json: opts.json });
+      process.exitCode = code;
     });
 
   program

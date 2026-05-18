@@ -1,0 +1,37 @@
+---
+name: debug
+description: Diagnose the current omcp session or repo state using logs, traces, state, and focused reproduction
+model:
+  claude: claude-sonnet-4.6
+  gpt: gpt-5.2-codex
+---
+
+# Debug
+
+Use this skill when the user wants help diagnosing a current omcp / Copilot CLI session problem, workflow breakage, or confusing runtime behavior.
+
+## Goal
+Find the real failure signal quickly and explain the next corrective step.
+
+## Workflow
+1. Read the user's issue description carefully.
+2. Inspect the most relevant local evidence first:
+   - trace tools (`omcp` trace surfaces and trace MCP server, when available)
+   - state tools (`omcp state list` / `omcp state read <mode>`)
+   - notepad / project memory (persist via project memory tools when relevant)
+   - failing tests or commands
+3. Reproduce the issue narrowly if possible.
+4. Distinguish symptoms from root cause.
+5. Recommend the smallest next fix or verification step.
+
+## Rules
+- Prefer real evidence over guesses.
+- Use the trace/state surfaces when the issue involves orchestration, hooks, or agent flow.
+- If the issue is actually a product/runtime bug rather than app code, say so plainly.
+- Do not prescribe broad rewrites before isolating the failure.
+
+## Output
+- Observed failure
+- Root-cause hypothesis
+- Evidence for that hypothesis
+- Smallest next action

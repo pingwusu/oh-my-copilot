@@ -18,6 +18,7 @@ const SERVER_FILES: Record<string, string> = {
   loop: "loop-server.js",
   "code-intel": "code-intel-server.js",
   hermes: "hermes-server.js",
+  wiki: "wiki-server.js",
 };
 
 export interface ResolvedServer {
