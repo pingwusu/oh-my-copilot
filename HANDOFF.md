@@ -2,14 +2,18 @@
 
 **Updated**: 2026-05-22 late-afternoon (post Phase 5 + Phase 6 milestone)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: `(commit hash filled at milestone commit)` v0.10.0 release
+**Latest commit**: `7ba6efe` v0.11.0 release
 
 ---
 
 ## TL;DR for the next agent
 
 This session executed the **ralplan iter-3 → iter-4 consensus loop** to APPROVE/APPROVE/APPROVE,
-then shipped Phase 1 + Phase 2 (partial) of the v3 hooks-parity plan as **v0.10.0**.
+then shipped **Phase 1 + Phase 2 (partial) + Phase 5 + Phase 6** of the v3 hooks-parity plan
+across two releases: **v0.10.0** (Phase 1 + Phase 2 A/B + smoke verdict) and **v0.11.0**
+(Phase 5 + Phase 6 + Option A decision recorded).
+
+Tests: 398 (v0.9.1) → **532 passing** (+134 net). 10 commits this session.
 
 | Phase | Status | Deliverable | Commit |
 |---|---|---|---|
@@ -74,19 +78,14 @@ subsystems** that omcp does not have:
 - `features/boulder-state/*` — needed by omc-orchestrator
 - `notepad in-process state` — needed by omc-orchestrator (omcp has notepad MCP tools but no in-process module)
 
-**Three port-strategy options for next session** (full analysis in `docs/plans/phase-2-deferred-hooks.md`):
+**User chose Option A** (2026-05-22): port the missing omc subsystems first (worktree-paths →
+ralph state schema → ultrawork → …), THEN port persistent-mode + todo-continuation + omc-orchestrator.
+Estimated 2-3 sessions of foundational work before the 3 deferred hooks land. Options B (thin
+omcp-native variants) and C (defer entirely) were considered and rejected — full analysis in
+`docs/plans/phase-2-deferred-hooks.md`.
 
-**Option A:** port the missing subsystems first (worktree-paths → ralph state schema → ultrawork → …),
-then port the 3 hooks. ~2-3 sessions.
-
-**Option B:** ship thin omcp-native variants now (persistent-mode reads a minimal ralph-state.json;
-todo-continuation reads a minimal todos.jsonl; omc-orchestrator inline-enforces delegation patterns).
-~1 follow-up session. Thinner than omc but matches v3 plan "no approximation" spirit modulo missing
-subsystems.
-
-**Option C:** defer the 3 hooks entirely until omcp ↔ omc subsystem parity is built up.
-
-User should pick the direction before next session starts coding.
+Detailed N+1 / N+2 ordering for Option A execution is documented further down in the
+"What the next session should do" section.
 
 ---
 
