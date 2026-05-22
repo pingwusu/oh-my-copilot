@@ -99,8 +99,8 @@ never accumulate duplicates. Entries without the marker (user-authored) are
 preserved verbatim.
 
 For each event in `OMCP_HOOK_EVENTS`
-(`PreToolUse`, `PostToolUse`, `PreSubmit`, `PostSubmit`, `SessionStart`,
-`PreEnd`) we add a matcher group of the form:
+(`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`,
+`SessionEnd`) we add a matcher group of the form:
 
 ```json
 {

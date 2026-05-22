@@ -3,13 +3,29 @@
 // via the plugin manifest's optional `hooks:` field; v0.1 ships the type
 // definitions and a couple of reference hooks (run-task-checklist, suggest-fleet).
 
+// Aligned with the 13 valid Copilot CLI hook events (v1.0.48), verified
+// against (a) docs.github.com/en/copilot/reference/hooks-configuration and
+// (b) empirical extraction of the `aWr` Set from the installed Copilot CLI
+// bundle (`@github/copilot/app.js`). Use the PascalCase alias where one
+// exists; `subagentStart` has no alias and must be the camelCase form.
+//
+// Previous v0.x (pre-0.9.1) shipped Claude-Code-style names "PreSubmit",
+// "PostSubmit", "PreEnd". Copilot CLI silently ignores those event names —
+// any hook entries written under them never fire. Fixed in v0.9.1.
 export type HookEvent =
+  | "SessionStart"
+  | "SessionEnd"
+  | "UserPromptSubmit"
   | "PreToolUse"
   | "PostToolUse"
-  | "PreSubmit"
-  | "PostSubmit"
-  | "SessionStart"
-  | "PreEnd";
+  | "PostToolUseFailure"
+  | "ErrorOccurred"
+  | "Stop"
+  | "SubagentStop"
+  | "subagentStart"
+  | "PreCompact"
+  | "PermissionRequest"
+  | "Notification";
 
 export interface HookContext {
   event: HookEvent;

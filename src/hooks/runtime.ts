@@ -111,10 +111,17 @@ function inferEventsFromFilename(file: string): HookEvent[] {
   const all: HookEvent[] = [
     "PreToolUse",
     "PostToolUse",
-    "PreSubmit",
-    "PostSubmit",
+    "UserPromptSubmit",
     "SessionStart",
-    "PreEnd",
+    "SessionEnd",
+    "Stop",
+    "SubagentStop",
+    "subagentStart",
+    "PreCompact",
+    "PermissionRequest",
+    "PostToolUseFailure",
+    "ErrorOccurred",
+    "Notification",
   ];
   return all.filter((e) => lower.includes(e.toLowerCase()));
 }
@@ -129,10 +136,17 @@ function makeShellHook(file: string, timeoutMs: number): Hook {
       : [
           "PreToolUse",
           "PostToolUse",
-          "PreSubmit",
-          "PostSubmit",
+          "UserPromptSubmit",
           "SessionStart",
-          "PreEnd",
+          "SessionEnd",
+          "Stop",
+          "SubagentStop",
+          "subagentStart",
+          "PreCompact",
+          "PermissionRequest",
+          "PostToolUseFailure",
+          "ErrorOccurred",
+          "Notification",
         ];
   const name = file.split(/[\\/]/).pop() ?? file;
   return {
@@ -385,13 +399,24 @@ export interface RunFireCliOpts {
   loadOptions?: LoadOptions;
 }
 
+// Aligned with the 13 valid Copilot CLI events. `subagentStart` has no
+// PascalCase alias (per Copilot 1.0.48 bundle), so the camelCase form is
+// the only acceptable spelling for that single event. Old Claude-style
+// names ("PreSubmit"/"PostSubmit"/"PreEnd") were removed in v0.9.1.
 const VALID_EVENTS: HookEvent[] = [
+  "SessionStart",
+  "SessionEnd",
+  "UserPromptSubmit",
   "PreToolUse",
   "PostToolUse",
-  "PreSubmit",
-  "PostSubmit",
-  "SessionStart",
-  "PreEnd",
+  "PostToolUseFailure",
+  "ErrorOccurred",
+  "Stop",
+  "SubagentStop",
+  "subagentStart",
+  "PreCompact",
+  "PermissionRequest",
+  "Notification",
 ];
 
 export async function runFireCli(opts: RunFireCliOpts): Promise<number> {

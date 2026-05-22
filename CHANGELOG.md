@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-05-22
+
+### Fixed — CRITICAL P0: hook event names were Claude-Code, not Copilot
+
+omcp v0.4.0 through v0.9.0 wrote hook entries to `~/.copilot/settings.json`
+under event names `PreSubmit`, `PostSubmit`, `PreEnd` — these are
+**Claude Code event names, not Copilot CLI event names**. Copilot CLI 1.0.48
+silently drops hook entries registered under unknown event names. Result:
+**3 of 6 omcp-managed hooks (50%) were dead in production** for every user
+who installed omcp.
+
+**Discovery**: User pushed back on the v2 hooks-parity plan's assumption that
+Copilot lacks SubagentStart/Stop / PreCompact events. A 3-way research wave
+(official docs + Claude-side cross-reference + empirical extraction of the
+`aWr` Set from `@github/copilot/app.js` v1.0.48) revealed Copilot CLI
+actually exposes **13 hook events** (not the 6 omcp assumed):
+`sessionStart`, `sessionEnd`, `userPromptSubmitted`, `preToolUse`,
+`postToolUse`, `postToolUseFailure`, `errorOccurred`, `agentStop`,
+`subagentStop`, `subagentStart`, `preCompact`, `permissionRequest`,
+`notification`. Both camelCase and PascalCase aliases accepted, except
+`subagentStart` which is camelCase-only.
+
+**Fixes**:
+
+- `src/runtime/copilot-config.ts`: `OMCP_HOOK_EVENTS` corrected from 6 (with
+  3 invalid names) to 5 valid names:
+  - `PreSubmit`  → `UserPromptSubmit`
+  - `PreEnd`    → `SessionEnd`
+  - `PostSubmit` → dropped (no Copilot equivalent — `Stop` fires per turn,
+                   not per submission)
+- `src/runtime/copilot-config.ts`: added `COPILOT_VALID_EVENTS` constant
+  with all 13 valid event names + PascalCase aliases (authoritative source).
+- `src/hooks/hook-types.ts`: `HookEvent` union expanded from 6 (with bad
+  names) to 13 Copilot events. Future hooks can now subscribe to
+  `Stop`, `SubagentStop`, `subagentStart`, `PreCompact`,
+  `PostToolUseFailure`, `PermissionRequest`, `ErrorOccurred`, `Notification`
+  — events that were previously invalid in the type.
+- `src/hooks/runtime.ts`: 3 internal event lists (`inferEventsFromFilename`,
+  default-events fallback, `VALID_EVENTS`) updated to the corrected 13.
+- `docs/architecture/hooks-wiring.md`: event list inline updated.
+
+**Migration**: `mergeCopilotHooks` already strips stale `__omcp:true`
+entries before re-emitting fresh ones. Existing installations get their
+broken `PreSubmit`/`PostSubmit`/`PreEnd` entries cleaned up automatically
+on next `omcp setup` (re-run setup to apply v0.9.1 to your existing
+config).
+
+**Regression test**: `src/__tests__/copilot-hook-events-validation.test.ts`
+(5 tests). Guards against future Claude-Code event-name drift.
+
 ## [0.9.0] — 2026-05-22
 
 ### Added — DD10 iteration (2 independent critics on v0.8.0, hardening fold-in)

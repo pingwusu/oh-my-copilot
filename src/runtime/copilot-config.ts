@@ -118,14 +118,58 @@ export function mergeMcpServers(
 // reliably identify and refresh omcp-managed hook entries without disturbing
 // any unrelated user-authored hook entries that share the same event.
 
-/** Hook events omcp wires by default. Aligned with HookEvent in hook-types. */
+/**
+ * Hook events omcp wires by default. Aligned with HookEvent in hook-types
+ * and with the 13 valid Copilot CLI events (`@github/copilot/app.js aWr Set`).
+ *
+ * v0.9.0 and earlier shipped Claude-Code-style names ("PreSubmit",
+ * "PostSubmit", "PreEnd") — Copilot CLI does NOT recognize those names and
+ * silently drops the hook entries, leaving 3 of 6 omcp-managed hooks dead in
+ * production. Fixed in v0.9.1 by renaming:
+ *   PreSubmit  -> UserPromptSubmit
+ *   PreEnd     -> SessionEnd
+ *   PostSubmit -> (dropped — Copilot has no equivalent; the closest is Stop
+ *                  which fires per-turn, not per-submission)
+ * mergeCopilotHooks() already strips stale __omcp-marked entries on next
+ * `omcp setup`, so existing settings.json files are migrated automatically.
+ */
 export const OMCP_HOOK_EVENTS = [
   "PreToolUse",
   "PostToolUse",
-  "PreSubmit",
-  "PostSubmit",
+  "UserPromptSubmit",
   "SessionStart",
-  "PreEnd",
+  "SessionEnd",
+] as const;
+
+/** Authoritative set of valid Copilot CLI hook event names (13 total). */
+export const COPILOT_VALID_EVENTS = [
+  "sessionStart",
+  "sessionEnd",
+  "userPromptSubmitted",
+  "preToolUse",
+  "postToolUse",
+  "postToolUseFailure",
+  "errorOccurred",
+  "agentStop",
+  "subagentStop",
+  "subagentStart",
+  "preCompact",
+  "permissionRequest",
+  "notification",
+  // PascalCase aliases (from the Copilot bundle's `s2t` map) — `subagentStart`
+  // has NO PascalCase alias and is intentionally absent here.
+  "SessionStart",
+  "SessionEnd",
+  "UserPromptSubmit",
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "ErrorOccurred",
+  "Stop",
+  "SubagentStop",
+  "PreCompact",
+  "PermissionRequest",
+  "Notification",
 ] as const;
 
 export type CopilotHookEventName = (typeof OMCP_HOOK_EVENTS)[number] | string;
