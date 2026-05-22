@@ -84,7 +84,7 @@ All 20 omc shell hooks now have direct Copilot event targets. No approximation n
 | 15 | pre-compact | PreCompact | PreCompact | TRIVIAL |
 | 16 | project-memory-precompact | PreCompact | PreCompact | TRIVIAL |
 | 17 | context-guard-stop | Stop | Stop | TRIVIAL |
-| 18 | persistent-mode | Stop | Stop | SIMPLE |
+| 18 | persistent-mode | Stop | Stop | MEDIUM |
 | 19 | code-simplifier | Stop | Stop | SIMPLE |
 | 20 | session-end | SessionEnd | SessionEnd | TRIVIAL |
 
@@ -197,23 +197,38 @@ Option D delivers ~2x value over v2: full parity (zero gaps) PLUS novel applicat
 - Expand `OMCP_HOOK_EVENTS` from 5 to all 13 events (wire all events in `~/.copilot/config.json`)
 - Expand `HookResult` type with `modifiedArgs`, `modifiedResult`, `interrupt` variants (`hook-types.ts:39-42`)
 - Add `additionalContext` output field to `runFireCli` stdout JSON (`runtime.ts:440-451`)
+- **HARD GATE: `modifiedResult` empirical smoke test.** Create a probe hook that emits stdout JSON `{ modifiedResult: "CANARY-<timestamp>" }` on `PostToolUse` for a benign tool call (e.g., Read of a tiny file). Invoke Copilot CLI 1.0.48 (`/c/.tools/.npm-global/copilot`) with a script that triggers the probed tool, then inspect what content the model sees. Three possible outcomes:
+  - **PASS** — model sees `CANARY-<timestamp>` (true replacement semantics). Phases 4-5 stay on plan as written.
+  - **APPEND** — model sees both original output AND `CANARY-<timestamp>` (the field is append-only like `additionalContext`). Phases 4-5 acceptance criteria amended: hallucination-shield can prepend annotations but cannot replace; PII redactor degrades to advise-only warnings.
+  - **FAIL** — `modifiedResult` field silently ignored. Phases 4-5 revert to v2-style advise-only fallback (post-hoc factcheck only, no proactive rewrite).
+- Document determination in `docs/architecture/hooks-modifiedresult-verification.md`.
 
-**Acceptance:** `OMCP_HOOK_EVENTS` length === 13. `HookResult` union has 6 variants. `omcp hook fire Notification --json` is accepted (not "unknown event").
+**Acceptance:**
+1. `OMCP_HOOK_EVENTS` length === 13.
+2. `HookResult` union has 6 variants.
+3. `omcp hook fire Notification --json` is accepted (not "unknown event").
+4. `modifiedResult` smoke test PASS/APPEND/FAIL is documented in `docs/architecture/hooks-modifiedresult-verification.md`.
+5. If smoke test is APPEND or FAIL, Phase 4 acceptance criteria are updated to advise-only behavior BEFORE Phase 4 work begins (i.e., the gate blocks Phase 4 entry).
 
 ### Phase 2: Anti-Hallucination Core Ports [USER PRIORITY]
 
 Port the 6 highest-priority hooks/libraries using direct 1:1 event mapping:
 
-| Module | Event | Source Reference |
-|--------|-------|-----------------|
-| persistent-mode | Stop | Ralph/ralplan persistence backbone |
-| todo-continuation | Stop | Enforce task completion across turns |
-| omc-orchestrator | PreToolUse + PostToolUse | Coordinate execution mode behaviors |
-| factcheck (library) | N/A (library) | Claims validation engine for sentinel-gate |
-| sentinel-gate (library) | N/A (library) | Readiness gate for team workers |
-| preemptive-compaction | PostToolUse + PreCompact | Context overflow prevention |
+| Module | Event | Source Reference | Difficulty |
+|--------|-------|-----------------|------------|
+| persistent-mode | Stop | Ralph/ralplan persistence backbone | **MEDIUM** |
+| todo-continuation | Stop | Enforce task completion across turns | SIMPLE |
+| omc-orchestrator | PreToolUse + PostToolUse | Coordinate execution mode behaviors | SIMPLE |
+| factcheck (library) | N/A (library) | Claims validation engine for sentinel-gate | SIMPLE |
+| sentinel-gate (library) | N/A (library) | Readiness gate for team workers | SIMPLE |
+| preemptive-compaction | PostToolUse + PreCompact | Context overflow prevention | SIMPLE |
 
-**Acceptance:** persistent-mode returns advise when ralph-state.json is active. sentinel-gate blocks worker launch when factcheck fails. preemptive-compaction fires on both PostToolUse and PreCompact. Each has unit test.
+**persistent-mode rewrite note (MEDIUM, not SIMPLE):** omc's `persistent-mode/index.ts` carries Claude-specific dependencies — `getClaudeConfigDir()` reads `~/.claude/`, and lines 313-425 scan Claude transcript JSON for context-percent estimation and architect-approval detection. Copilot does not expose transcript content in the same format. omcp port must replace these paths with:
+- omcp's own state files under `.omcp/state/ralph-state.json` (already used by ralph mode)
+- A Copilot-side context-percent estimator that does NOT depend on transcript JSON (options: token-count heuristic via `PreCompact` event metadata, or `omcp hook fire`-supplied payload field)
+- Architect-approval detection must read from omcp's own approval markers, not Claude transcript scan
+
+**Acceptance:** persistent-mode returns advise when `.omcp/state/ralph-state.json` is active. sentinel-gate blocks worker launch when factcheck fails. preemptive-compaction fires on both PostToolUse and PreCompact. Each has unit test. persistent-mode unit tests cover all 3 state branches (active / inactive / stale >2h) AND assert NO references to `~/.claude/` paths remain in the omcp implementation.
 
 ### Phase 3: Subagent Lifecycle + Session Hooks [NO LONGER DEFERRED]
 
@@ -245,18 +260,16 @@ Build the `modifiedResult`-based proactive factcheck -- the single most novel ap
 
 **Acceptance:** `hallucination-shield` modifies a PostToolUse result containing a fabricated file path to include `[UNVERIFIED: file not found]` annotation. PII redactor replaces a credit card number in Bash output with `[REDACTED]`. Output truncator reduces a 10000-line Read result to ~200 lines with `[...truncated N lines...]` markers.
 
-### Phase 5: Cost Governor + Audit Middleware [COPILOT SUPERCHARGER]
+### Phase 5: Cost Governor + Audit Middleware (interrupt-only v1) [COPILOT SUPERCHARGER]
 
-Build the `modifiedArgs` + `interrupt` applications.
+**Scope reduction per Architect iter-3 condition 2:** `modifiedArgs` arg-rewriting (bash-safety-net, cost optimizer via arg downgrade, surgeon-mode middleware chain) is **deferred to Phase 7**. Phase 5 ships interrupt-only governance + audit logging only. Both behaviors rely on already-validated hook plumbing (`block`, `interrupt`, append-only logging) — no speculative new semantics.
 
 **Work:**
-- Implement `modifiedArgs` handler in `PreToolUse` hook runner
-- Create `bash-safety-net` hook: inject `--dry-run` on destructive commands via modifiedArgs
-- Create `cost-governor` hook: track cumulative tool calls in `.omcp/state/cost.json`; interrupt via PermissionRequest when budget exceeded
-- Create `loop-detector` hook: track repeated similar tool calls; interrupt after N repeats
-- Create `audit-logger` hook: log full tool-call lifecycle (args -> modifiedArgs -> result -> modifiedResult) to `.omcp/state/audit.jsonl`
+- Create `cost-governor` hook: track cumulative tool calls in `.omcp/state/cost.json` (atomic write per invariant 2); returns `{kind: "interrupt"}` via `PermissionRequest` when budget exceeded
+- Create `loop-detector` hook: track repeated similar tool calls; returns `{kind: "interrupt"}` after N identical/near-identical repeats
+- Create `audit-logger` hook: appends full tool-call lifecycle to `.omcp/state/audit.jsonl` (timestamp, event, tool, args hash, result hash, duration_ms, hook decisions chain). Append-only — no `modifiedArgs`/`modifiedResult` dependency in v1.
 
-**Acceptance:** `bash-safety-net` rewrites `rm -rf /tmp/test` to `rm -rf /tmp/test --dry-run` (or blocks). Cost governor interrupts after configurable threshold. Audit logger produces valid JSONL with both original and modified fields.
+**Acceptance:** Cost governor interrupts after configurable threshold (verified via `omcp hook fire PermissionRequest --json` with a context exceeding threshold). Loop detector interrupts after N identical calls (parameterized N tested at 3, 5, 10). Audit logger produces valid JSONL — each line a parseable JSON object with the documented schema. Unit tests for each hook + 1 integration test asserting the chain fires in the right order on a synthetic PreToolUse → PostToolUse sequence.
 
 ### Phase 6: Telemetry + Status Integration
 
@@ -270,14 +283,29 @@ Wire the two Copilot-only events with no Claude equivalent.
 
 **Acceptance:** `ErrorOccurred` events produce entries in `errors.jsonl`. Notification events reach the background dispatcher. `omcp doctor` includes error pattern summary.
 
+### Phase 7: modifiedArgs Applications + Surgeon Mode [DEFERRED — needs independent empirical gate]
+
+**Gate:** Mirrors Phase 1's `modifiedResult` smoke test. Before Phase 7 begins, run a `modifiedArgs` smoke probe: a PreToolUse hook returns `{ modifiedArgs: {...altered...} }` for a benign Bash call; verify Copilot actually invokes the tool with the modified args (vs the original). Document PASS/APPEND/FAIL in `docs/architecture/hooks-modifiedargs-verification.md`. Phase 7 proceeds only on PASS.
+
+**Work (gated on smoke test):**
+- Implement `modifiedArgs` handler in `PreToolUse` hook runner
+- Create `bash-safety-net` hook: inject `--dry-run` on destructive commands via modifiedArgs (or block on FAIL/APPEND)
+- Create `cost-optimizer` hook: narrow over-broad search/glob scopes via modifiedArgs
+- Surgeon-mode middleware: chained `modifiedArgs` (PreToolUse) → `modifiedResult` (PostToolUse). Requires BOTH Phase 1 and Phase 7 smoke tests PASS.
+- Path normalizer, shell-quoting sanitizer, secret redactor (modifiedArgs variants)
+
+**Rationale for deferral (Architect iter-3 condition 2):** arg-rewriting is fundamentally different from append-style stdout injection. The Architect ruled it speculative in v1 — the protocol must be empirically validated independently of `modifiedResult`. Treating Phase 7 as separable also limits blast radius: if `modifiedArgs` fails empirically, Phases 1-6 still ship as a complete release.
+
+**Acceptance:** `modifiedArgs` smoke test PASS. `bash-safety-net` rewrites destructive args (verified by stub Copilot CLI invocation). `cost-optimizer` narrows a Glob pattern (e.g., `**/*` → bounded scope). Surgeon-mode integration test asserts both args and result are modified in a single tool-call lifecycle.
+
 ---
 
 ## Pre-mortem (3 scenarios)
 
 **Scenario 1: `modifiedArgs`/`modifiedResult` JSON protocol differs from documentation**
 - **Trigger:** Copilot CLI expects a different stdout schema for arg/result rewriting than what the docs describe.
-- **Detection:** Phase 4/5 integration tests fail -- modified args/results not applied.
-- **Mitigation:** Empirical probe in Phase 1 remaining work: create a smoke hook returning `{ modifiedResult: "CANARY" }` on PostToolUse, verify Copilot applies it. If schema differs, adapt `HookResult` serialization. Fallback: use `advise` to inject correction text post-hoc (degrades to v2 behavior for Phase 4/5 features only).
+- **Detection:** Phase 4 (`modifiedResult`) and Phase 7 (`modifiedArgs`) integration tests fail -- modified args/results not applied.
+- **Mitigation:** Empirical smoke probes: Phase 1 gates `modifiedResult` semantics; Phase 7 gates `modifiedArgs` semantics. Each gate has three outcomes (PASS / APPEND / FAIL). If schema differs, adapt `HookResult` serialization. Fallback: use `advise` to inject correction text post-hoc (degrades Phase 4 features to v2 behavior; Phase 7 features are not built unless their gate passes).
 
 **Scenario 2: persistent-mode hits timeout during ralph iteration 50+**
 - **Trigger:** State file I/O slow under large `.omcp/state/ralph-state.json` after many iterations.
@@ -287,7 +315,7 @@ Wire the two Copilot-only events with no Claude equivalent.
 **Scenario 3: Copilot CLI 1.1.x changes event names or adds new ones**
 - **Trigger:** Upstream Copilot update renames/adds events.
 - **Detection:** `copilot-hook-events-validation.test.ts` fails if COPILOT_VALID_EVENTS diverges from runtime.
-- **Mitigation:** `COPILOT_VALID_EVENTS` and `OMCP_HOOK_EVENTS` are isolated constants (`copilot-config.ts:136,145`). Pin minimum Copilot CLI version in docs. Add version-check advisory on SessionStart.
+- **Mitigation:** `COPILOT_VALID_EVENTS` and `OMCP_HOOK_EVENTS` are isolated constants (`copilot-config.ts:136,145`). **Active runtime version check, not docs-only pin:** SessionStart hook reads `copilot --version` via `runCli({timeoutMs: 2000})`; on mismatch (>= configured minimum) it logs an advise message recommending `omcp doctor`. `omcp doctor` re-runs the version check + asserts every event in `OMCP_HOOK_EVENTS` is present in the Copilot bundle's `aWr` set (introspect via reading installed `@github/copilot/app.js` if accessible) and reports the drift as a P1 issue.
 
 ---
 
@@ -305,8 +333,8 @@ Wire the two Copilot-only events with no Claude equivalent.
 
 **Integration tests (multi-hook dispatch):**
 - `fireHooks("Stop", ctx)` dispatches to persistent-mode + todo-continuation + context-guard-stop in order.
-- `fireHooks("PreToolUse", ctx)` dispatches to pre-tool-enforcer + omc-orchestrator + bash-safety-net; modifiedArgs from safety-net is applied.
-- `fireHooks("PostToolUse", ctx)` dispatches to post-tool-verifier + hallucination-shield + output-truncator; modifiedResult is chained.
+- `fireHooks("PreToolUse", ctx)` dispatches to pre-tool-enforcer + omc-orchestrator. (Note: `bash-safety-net` + `modifiedArgs` integration is **Phase 7** scope, not Phase 5 — see Phase 7 gate.)
+- `fireHooks("PostToolUse", ctx)` dispatches to post-tool-verifier + hallucination-shield + output-truncator. **Single-hook modifiedResult** is verified here; **chained modifiedResult across multiple PostToolUse hooks (surgeon-mode)** is deferred to Phase 7 and not in Phase 4 acceptance.
 - `fireHooks("subagentStart", ctx)` dispatches subagent-tracker. Case-sensitive: "SubagentStart" must NOT match.
 - `loadHooks()` discovers all registered hooks from plugin dir and repo-local `.omcp/hooks/`.
 
@@ -356,10 +384,10 @@ Wire the two Copilot-only events with no Claude equivalent.
 **Consequences:**
 - `OMCP_HOOK_EVENTS` expands from 5 to 13 (more config.json entries, but all trivially auto-managed by `mergeCopilotHooks`).
 - `HookResult` expands from 3 to 6 variants (breaking change for any external hook authors -- document in CHANGELOG).
-- Phase 4/5 (Copilot-advantage features) are novel code, not ports -- higher implementation risk, needs empirical validation of `modifiedArgs`/`modifiedResult` protocol.
+- Phase 4 (`modifiedResult` hallucination shield) and Phase 7 (`modifiedArgs` arg-rewriting + surgeon mode) are novel code, not ports — higher implementation risk, each gated on its own empirical smoke test. Phase 5 is now interrupt-only governance + audit logging (lower risk — only relies on already-validated `block`/`interrupt` plumbing + append-only state writes).
 
 **Follow-ups:**
-- Empirical smoke test of `modifiedArgs`/`modifiedResult` protocol in Phase 1 remaining work.
+- Empirical smoke test of `modifiedResult` protocol in Phase 1 remaining work; empirical smoke test of `modifiedArgs` protocol as Phase 7's gate.
 - Document Copilot-advantage features in `docs/architecture/copilot-advantages.md`.
 - Upstream feature request to Claude Code for `modifiedArgs`/`modifiedResult` equivalents.
 - Re-evaluate when Copilot CLI 1.1.x ships (may add more events or change protocol).
