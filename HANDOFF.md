@@ -222,8 +222,14 @@ depend on `-p`-mode hook firing.
 - **omx reference**: `C:\Users\runjiashi\_refs\oh-my-codex\` (read-only)
 - **Copilot CLI binary**: `/c/.tools/.npm-global/copilot.cmd` (v1.0.48)
 - **Copilot CLI bundle (for grep)**: `/c/.tools/.npm-global/node_modules/@github/copilot/app.js`
-- **GH auth**: user provided `<REDACTED-TOKEN>` mid-session (OAuth token).
-  Do NOT commit it. For follow-up smoke tests use `export GH_TOKEN="..." && export COPILOT_GITHUB_TOKEN="$GH_TOKEN"`.
+- **GH auth**: user supplied an OAuth token mid-session to unblock the smoke test.
+  **The token was inadvertently included in this HANDOFF file in commit a90e831
+  and has been redacted here.** No remote push has occurred (repo is local-only),
+  so the leak is confined to local git history. Recommended next steps:
+  (a) USER: revoke the token at https://github.com/settings/tokens and reissue;
+  (b) For follow-up smoke tests, set the new token in-shell only:
+  `export GH_TOKEN="..." && export COPILOT_GITHUB_TOKEN="$GH_TOKEN"` —
+  never write it to a tracked file.
 
 ---
 
