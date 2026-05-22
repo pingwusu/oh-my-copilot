@@ -132,13 +132,26 @@ export function mergeMcpServers(
  *                  which fires per-turn, not per-submission)
  * mergeCopilotHooks() already strips stale __omcp-marked entries on next
  * `omcp setup`, so existing settings.json files are migrated automatically.
+ *
+ * v0.10.0 expands from 5 events to all 13 valid Copilot hook events so that
+ * every hook category is wired by default. PascalCase aliases are used where
+ * they exist; `subagentStart` is camelCase-only (no PascalCase alias in the
+ * Copilot CLI `s2t` map).
  */
 export const OMCP_HOOK_EVENTS = [
-  "PreToolUse",
-  "PostToolUse",
-  "UserPromptSubmit",
   "SessionStart",
   "SessionEnd",
+  "UserPromptSubmit",
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "ErrorOccurred",
+  "Stop",
+  "SubagentStop",
+  "subagentStart",
+  "PreCompact",
+  "PermissionRequest",
+  "Notification",
 ] as const;
 
 /** Authoritative set of valid Copilot CLI hook event names (13 total). */

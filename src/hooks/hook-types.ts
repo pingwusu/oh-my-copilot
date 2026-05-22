@@ -36,10 +36,28 @@ export interface HookContext {
   cwd: string;
 }
 
+/**
+ * Result returned by a hook's `run()` method.
+ *
+ * - `noop`           — no action; hook ran successfully but has nothing to say.
+ * - `advise`         — inject advisory text into the model context
+ *                      (`additionalContext` field in Copilot stdout protocol).
+ * - `block`          — prevent the tool call from proceeding (PreToolUse only).
+ * - `modifiedArgs`   — rewrite tool arguments before execution (PreToolUse only).
+ *                      Phase 7 scope; gated on `modifiedArgs` smoke test.
+ * - `modifiedResult` — rewrite tool output before the model sees it
+ *                      (PostToolUse only). Phase 4 scope; gated on Phase 1
+ *                      `modifiedResult` smoke test.
+ * - `interrupt`      — hard-stop the agent (PermissionRequest only).
+ *                      No Claude-Code equivalent.
+ */
 export type HookResult =
   | { kind: "noop" }
   | { kind: "advise"; text: string }
-  | { kind: "block"; reason: string };
+  | { kind: "block"; reason: string }
+  | { kind: "modifiedArgs"; args: unknown }
+  | { kind: "modifiedResult"; result: unknown }
+  | { kind: "interrupt"; reason: string };
 
 export interface Hook {
   name: string;

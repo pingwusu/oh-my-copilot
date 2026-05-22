@@ -419,6 +419,22 @@ const VALID_EVENTS: HookEvent[] = [
   "Notification",
 ];
 
+/**
+ * Execute all hooks for `opts.event` and write results to stdout.
+ *
+ * Copilot stdout protocol fields produced (JSON mode only):
+ *   - `event`            — the event name that was fired.
+ *   - `results`          — raw array of `{ hook, result }` entries for diagnostics.
+ *   - `additionalContext` — concatenation of all `advise` result texts, joined
+ *                           by newline. Copilot injects this into the model context.
+ *   - `modifiedArgs`     — last `modifiedArgs` result's `args` value (last-wins).
+ *                           Present only when at least one hook returns this kind.
+ *   - `modifiedResult`   — last `modifiedResult` result's `result` value (last-wins).
+ *                           Present only when at least one hook returns this kind.
+ *   - `interrupt`        — `true` when any hook returns `{ kind: "interrupt" }`.
+ *   - `reason`           — reason from the last `interrupt` result. Present only
+ *                           when `interrupt` is true.
+ */
 export async function runFireCli(opts: RunFireCliOpts): Promise<number> {
   if (!VALID_EVENTS.includes(opts.event as HookEvent)) {
     process.stderr.write(`omcp hook fire: unknown event "${opts.event}"\n`);
@@ -438,7 +454,38 @@ export async function runFireCli(opts: RunFireCliOpts): Promise<number> {
   };
   const entries = await fireHooks(event, ctx, opts.loadOptions ?? { env: opts.env, cwd });
   if (opts.json) {
-    process.stdout.write(`${JSON.stringify({ event, results: entries })}\n`);
+    // Build summary fields for the Copilot stdout protocol.
+    const adviseTexts: string[] = [];
+    let modifiedArgs: unknown = undefined;
+    let hasModifiedArgs = false;
+    let modifiedResult: unknown = undefined;
+    let hasModifiedResult = false;
+    let interrupt = false;
+    let interruptReason: string | undefined;
+    for (const e of entries) {
+      const r = e.result;
+      if (r.kind === "advise") {
+        adviseTexts.push(r.text);
+      } else if (r.kind === "modifiedArgs") {
+        modifiedArgs = r.args;
+        hasModifiedArgs = true;
+      } else if (r.kind === "modifiedResult") {
+        modifiedResult = r.result;
+        hasModifiedResult = true;
+      } else if (r.kind === "interrupt") {
+        interrupt = true;
+        interruptReason = r.reason;
+      }
+    }
+    const summary: Record<string, unknown> = {};
+    if (adviseTexts.length > 0) summary.additionalContext = adviseTexts.join("\n");
+    if (hasModifiedArgs) summary.modifiedArgs = modifiedArgs;
+    if (hasModifiedResult) summary.modifiedResult = modifiedResult;
+    if (interrupt) {
+      summary.interrupt = true;
+      summary.reason = interruptReason;
+    }
+    process.stdout.write(`${JSON.stringify({ event, results: entries, ...summary })}\n`);
   } else {
     for (const e of entries) {
       const r = e.result;
@@ -446,6 +493,12 @@ export async function runFireCli(opts: RunFireCliOpts): Promise<number> {
         process.stdout.write(`[${e.hook}] advise: ${r.text}\n`);
       } else if (r.kind === "block") {
         process.stdout.write(`[${e.hook}] block: ${r.reason}\n`);
+      } else if (r.kind === "modifiedArgs") {
+        process.stdout.write(`[${e.hook}] modifiedArgs: ${JSON.stringify(r.args)}\n`);
+      } else if (r.kind === "modifiedResult") {
+        process.stdout.write(`[${e.hook}] modifiedResult: ${JSON.stringify(r.result)}\n`);
+      } else if (r.kind === "interrupt") {
+        process.stdout.write(`[${e.hook}] interrupt: ${r.reason}\n`);
       }
     }
   }
