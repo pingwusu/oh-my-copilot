@@ -4,6 +4,7 @@
 
 import { runMcpServer } from "./server-runtime.js";
 import {
+  searchSessions,
   traceAppend,
   traceSummary,
   traceTimeline,
@@ -51,6 +52,20 @@ runMcpServer({
       },
       handler: (args) =>
         traceTimeline(args.sessionId as string, args.limit as number | undefined),
+    },
+    {
+      name: "session_search",
+      description: "Search across all trace sessions by keyword. Returns matching events with sessionId, kind, t, and snippet.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: ["query"],
+      },
+      handler: (args) =>
+        searchSessions(args.query as string, { limit: args.limit as number | undefined }),
     },
   ],
 }).catch((err) => {

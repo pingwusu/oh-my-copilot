@@ -2,7 +2,7 @@
 // Path resolution: OMCP_TRACE_ROOT env var overrides the default, so tests
 // can isolate to a tmp directory without polluting .omcp/.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { assertSafeSlug } from "./safe-slug.js";
 
@@ -30,7 +30,54 @@ export function loadTrace(sessionId: string, root?: string): TraceEvent[] {
   return raw
     .split(/\r?\n/)
     .filter((l) => l.trim().length > 0)
-    .map((l) => JSON.parse(l) as TraceEvent);
+    .flatMap((l) => {
+      try {
+        return [JSON.parse(l) as TraceEvent];
+      } catch {
+        console.error(`[trace] skipping malformed line: ${l.slice(0, 120)}`);
+        return [];
+      }
+    });
+}
+
+export interface SessionSearchResult {
+  sessionId: string;
+  kind: string;
+  t: string;
+  snippet: string;
+}
+
+export function searchSessions(
+  query: string,
+  options?: { limit?: number },
+): SessionSearchResult[] {
+  const root = traceRoot();
+  if (!existsSync(root)) return [];
+  const lq = query.toLowerCase();
+  const results: SessionSearchResult[] = [];
+  const limit = options?.limit ?? 50;
+  for (const entry of readdirSync(root)) {
+    if (!entry.endsWith(".jsonl")) continue;
+    const sessionId = entry.slice(0, -".jsonl".length);
+    const raw = readFileSync(join(root, entry), "utf8");
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      if (!line.toLowerCase().includes(lq)) continue;
+      try {
+        const ev = JSON.parse(line) as TraceEvent;
+        results.push({
+          sessionId,
+          kind: ev.kind,
+          t: ev.t,
+          snippet: line.slice(0, 200),
+        });
+        if (results.length >= limit) return results;
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+  return results;
 }
 
 export function appendTrace(sessionId: string, ev: TraceEvent, root?: string): void {

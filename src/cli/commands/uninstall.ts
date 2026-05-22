@@ -35,6 +35,8 @@ export const OMCP_MCP_SERVER_KEYS = [
   "omcp-code-intel",
   "omcp-hermes",
   "omcp-wiki",
+  "omcp-python-repl",
+  "omcp-shared-memory",
 ] as const;
 
 export interface UninstallOptions {

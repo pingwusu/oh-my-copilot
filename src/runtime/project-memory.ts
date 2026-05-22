@@ -19,7 +19,12 @@ export function projectMemoryPath(): string {
 export function loadProjectMemory(path?: string): ProjectMemory {
   const p = path ?? projectMemoryPath();
   if (!existsSync(p)) return { notes: [], directives: [], data: {} };
-  return JSON.parse(readFileSync(p, "utf8")) as ProjectMemory;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as ProjectMemory;
+  } catch {
+    console.error(`[project-memory] corrupt file at ${p} — returning empty state`);
+    return { notes: [], directives: [], data: {} };
+  }
 }
 
 export function saveProjectMemory(m: ProjectMemory, path?: string): void {

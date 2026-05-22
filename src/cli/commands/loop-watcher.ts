@@ -1,6 +1,6 @@
 // `omcp loop-watcher` — start/stop/status for the loop watcher daemon.
 
-import { execSync, spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -63,9 +63,10 @@ export function startWatcher(scriptPath: string): { pid: number } {
 export function stopWatcher(): { stopped: boolean; pid?: number } {
   if (!existsSync(pidFile())) return { stopped: false };
   const pid = readPid();
+  if (!Number.isFinite(pid)) return { stopped: false };
   try {
     if (process.platform === "win32") {
-      execSync(`taskkill /PID ${pid} /F`, { stdio: "ignore" });
+      spawnSync("taskkill", ["/PID", String(pid), "/F"], { stdio: "ignore" });
     } else {
       process.kill(pid, "SIGTERM");
     }

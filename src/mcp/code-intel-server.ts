@@ -3,7 +3,7 @@
 // Provides LSP-like diagnostics, symbol search, AST pattern matching, hover,
 // and reference search via pragmatic CLI wrappers (tsc, ast-grep/sg, grep).
 //
-// Tools exposed (9):
+// Tools exposed (17):
 //   - lsp_diagnostics           : tsc --noEmit per file
 //   - lsp_diagnostics_directory : tsc --noEmit per project
 //   - lsp_document_symbols      : regex-based symbol outline
@@ -13,14 +13,23 @@
 //   - lsp_servers               : binary availability report
 //   - ast_grep_search           : ast-grep --pattern (JSON)
 //   - ast_grep_replace          : ast-grep --rewrite (dryRun safe)
+//   - lsp_goto_definition       : grep-based definition finder
+//   - lsp_prepare_rename        : word-under-cursor extraction
+//   - lsp_rename                : word-boundary replace (file or workspace)
+//   - lsp_code_actions          : stub (placeholder)
+//   - lsp_code_action_resolve   : stub (placeholder)
+//   - deepinit_manifest         : recursive directory manifest
+//   - load_omcp_skills_local    : read .omcp/skills/ local skills
+//   - list_omcp_skills          : list skills/ from omcp installation
 //
 // Binary detection: tries `sg`, then `ast-grep`, then `npx @ast-grep/cli`.
 // All CLI calls use Node's child_process; no new npm deps required.
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
-import { basename, extname, join, relative, resolve } from "node:path";
+import { readFile, readdir, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runMcpServer } from "./server-runtime.js";
 
@@ -552,6 +561,276 @@ async function handleAstGrepReplace(args: Record<string, unknown>): Promise<unkn
   return { ...result, dryRun };
 }
 
+// ── New tools (DD9 parity additions) ────────────────────────────────────────
+
+// Definition patterns used by lsp_goto_definition
+const DEFINITION_PATTERNS: Array<{ kind: string; re: (name: string) => RegExp }> = [
+  { kind: "function",  re: (n) => new RegExp(`(?:export\\s+)?(?:async\\s+)?function\\s+${n}\\b`) },
+  { kind: "class",     re: (n) => new RegExp(`(?:export\\s+)?(?:abstract\\s+)?class\\s+${n}\\b`) },
+  { kind: "interface", re: (n) => new RegExp(`(?:export\\s+)?interface\\s+${n}\\b`) },
+  { kind: "type",      re: (n) => new RegExp(`(?:export\\s+)?type\\s+${n}\\s*=`) },
+  { kind: "const",     re: (n) => new RegExp(`(?:export\\s+)?const\\s+${n}\\s*[=:]`) },
+  { kind: "export",    re: (n) => new RegExp(`export\\s+.*\\b${n}\\b`) },
+  // Python / Go / Rust
+  { kind: "function",  re: (n) => new RegExp(`(?:async\\s+)?def\\s+${n}\\b`) },
+  { kind: "function",  re: (n) => new RegExp(`func\\s+(?:\\(\\w+\\s+\\*?\\w+\\)\\s+)?${n}\\b`) },
+  { kind: "function",  re: (n) => new RegExp(`(?:pub\\s+)?(?:async\\s+)?fn\\s+${n}\\b`) },
+  { kind: "struct",    re: (n) => new RegExp(`(?:pub\\s+)?struct\\s+${n}\\b`) },
+];
+
+async function handleLspGotoDefinition(args: Record<string, unknown>): Promise<unknown> {
+  const file = args.file as string | undefined;
+  const symbol = args.symbol as string | undefined;
+  if (!file || !symbol) return { error: "file and symbol are required" };
+  const symbolStr: string = symbol;
+
+  // Search workspace rooted at project root; fall back to file's directory
+  const dir = findProjectRoot(existsSync(file) ? join(file, "..") : file);
+  const results: Array<{ file: string; line: number; column: number; kind: string }> = [];
+
+  async function walk(d: string, depth: number): Promise<void> {
+    if (depth > 6 || results.length >= 20) return;
+    const entries = await readdir(d, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (results.length >= 20) break;
+      const full = join(d, entry.name);
+      if (entry.isDirectory()) {
+        if (
+          entry.name.startsWith(".") ||
+          entry.name === "node_modules" ||
+          entry.name === "dist" ||
+          entry.name === "__pycache__"
+        ) continue;
+        await walk(full, depth + 1);
+      } else if (entry.isFile() && CODE_EXTENSIONS.has(extname(entry.name))) {
+        try {
+          const content = await readFile(full, "utf-8");
+          const lines = content.split("\n");
+          for (let i = 0; i < lines.length; i++) {
+            for (const pat of DEFINITION_PATTERNS) {
+              if (pat.re(symbolStr).test(lines[i])) {
+                const col = lines[i].search(new RegExp(`\\b${symbolStr}\\b`));
+                results.push({ file: full, line: i + 1, column: col >= 0 ? col : 0, kind: pat.kind });
+                break;
+              }
+            }
+          }
+        } catch (err) {
+          process.stderr.write(`[code-intel-server] goto-def read failed: ${err}\n`);
+        }
+      }
+    }
+  }
+
+  await walk(dir, 0);
+  return { symbol, resultCount: results.length, definitions: results };
+}
+
+async function handleLspPrepareRename(args: Record<string, unknown>): Promise<unknown> {
+  const file = args.file as string | undefined;
+  const line = args.line as number | undefined;
+  const character = args.character as number | undefined;
+  if (!file || line === undefined || character === undefined) {
+    return { error: "file, line, and character are required" };
+  }
+  if (!existsSync(file)) return { error: `File not found: ${file}` };
+
+  const content = await readFile(file, "utf-8");
+  const lines = content.split("\n");
+  const targetLine = lines[line - 1] ?? "";
+  const IDENT_RE = /[A-Za-z_$][A-Za-z0-9_$]*/g;
+  let match: RegExpExecArray | null;
+  while ((match = IDENT_RE.exec(targetLine)) !== null) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (character >= start && character <= end) {
+      return {
+        range: { start: { line: line - 1, character: start }, end: { line: line - 1, character: end } },
+        placeholder: match[0],
+      };
+    }
+  }
+  return null;
+}
+
+async function handleLspRename(args: Record<string, unknown>): Promise<unknown> {
+  const file = args.file as string | undefined;
+  const oldName = args.oldName as string | undefined;
+  const newName = args.newName as string | undefined;
+  const scope = (args.scope as string | undefined) ?? "file";
+  if (!file || !oldName || !newName) return { error: "file, oldName, and newName are required" };
+
+  const wordRe = new RegExp(`\\b${oldName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g");
+  const TS_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".py"]);
+  const newNameStr: string = newName;
+
+  async function replaceInFile(targetFile: string): Promise<number> {
+    try {
+      const original = await readFile(targetFile, "utf-8");
+      const updated = original.replace(wordRe, newNameStr);
+      if (updated === original) return 0;
+      await writeFile(targetFile, updated, "utf-8");
+      const count = (original.match(wordRe) ?? []).length;
+      return count;
+    } catch (err) {
+      process.stderr.write(`[code-intel-server] rename write failed for ${targetFile}: ${err}\n`);
+      return 0;
+    }
+  }
+
+  const filesChanged: string[] = [];
+  let totalReplacements = 0;
+
+  if (scope === "workspace") {
+    const dir = findProjectRoot(existsSync(file) ? join(file, "..") : file);
+    async function walk(d: string, depth: number): Promise<void> {
+      if (depth > 6) return;
+      const entries = await readdir(d, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        const full = join(d, entry.name);
+        if (entry.isDirectory()) {
+          if (
+            entry.name.startsWith(".") ||
+            entry.name === "node_modules" ||
+            entry.name === "dist" ||
+            entry.name === "__pycache__"
+          ) continue;
+          await walk(full, depth + 1);
+        } else if (entry.isFile() && TS_EXTENSIONS.has(extname(entry.name))) {
+          const count = await replaceInFile(full);
+          if (count > 0) { filesChanged.push(full); totalReplacements += count; }
+        }
+      }
+    }
+    await walk(dir, 0);
+  } else {
+    // scope === "file" (default)
+    if (!existsSync(file)) return { error: `File not found: ${file}` };
+    const count = await replaceInFile(file);
+    if (count > 0) { filesChanged.push(file); totalReplacements += count; }
+  }
+
+  return { filesChanged, replacements: totalReplacements };
+}
+
+// Placeholder — real code-action analysis requires a language server.
+// TODO(M5): wire to a real LSP backend for actual code action suggestions.
+async function handleLspCodeActions(args: Record<string, unknown>): Promise<unknown> {
+  void args; // placeholder: real impl requires a language server
+  return { actions: [] };
+}
+
+// Placeholder — resolves an action by returning it unchanged.
+// TODO(M5): wire to a real LSP backend for code action resolution.
+async function handleLspCodeActionResolve(args: Record<string, unknown>): Promise<unknown> {
+  return args.action ?? null;
+}
+
+async function handleDeepInitManifest(args: Record<string, unknown>): Promise<unknown> {
+  const root = args.root as string | undefined;
+  const depthLimit = (args.depth as number | undefined) ?? 3;
+  if (!root) return { error: "root is required" };
+  if (!existsSync(root)) return { error: `Directory not found: ${root}` };
+  const rootStr: string = root;
+
+  const byExtension: Record<string, number> = {};
+  const dirFileCounts: Map<string, number> = new Map();
+  let totalFiles = 0;
+  let totalDirs = 0;
+
+  async function walk(d: string, depth: number): Promise<void> {
+    if (depth > depthLimit) return;
+    const entries = await readdir(d, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const full = join(d, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === ".git" || entry.name === "dist") continue;
+        totalDirs++;
+        await walk(full, depth + 1);
+      } else if (entry.isFile()) {
+        totalFiles++;
+        const ext = extname(entry.name) || "(no ext)";
+        byExtension[ext] = (byExtension[ext] ?? 0) + 1;
+        // Track counts for top-level dirs (depth 1 relative to root)
+        if (depth >= 1) {
+          const relParts = relative(rootStr, full).split(/[\\/]/);
+          if (relParts.length >= 1) {
+            const topDir = join(rootStr, relParts[0]);
+            dirFileCounts.set(topDir, (dirFileCounts.get(topDir) ?? 0) + 1);
+          }
+        }
+      }
+    }
+  }
+
+  await walk(rootStr, 0);
+
+  const topDirs = Array.from(dirFileCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([p, files]) => ({ path: relative(rootStr, p), files }));
+
+  return { files: totalFiles, dirs: totalDirs, byExtension, topDirs };
+}
+
+async function handleLoadOmcpSkillsLocal(_args: Record<string, unknown>): Promise<unknown> {
+  const skillsDir = join(process.cwd(), ".omcp", "skills");
+  if (!existsSync(skillsDir)) {
+    return { skills: [] };
+  }
+  try {
+    const entries = await readdir(skillsDir, { withFileTypes: true });
+    const skills = entries
+      .filter((e) => e.isFile() || e.isDirectory())
+      .map((e) => ({ name: basename(e.name, extname(e.name)), path: join(skillsDir, e.name) }));
+    return { skills };
+  } catch (err) {
+    process.stderr.write(`[code-intel-server] load-omcp-skills-local failed: ${err}\n`);
+    return { skills: [] };
+  }
+}
+
+async function handleListOmcpSkills(_args: Record<string, unknown>): Promise<unknown> {
+  // Locate the skills/ directory relative to this server file
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
+  // dist/mcp/code-intel-server.js → ../../skills/
+  const skillsDir = resolve(__dirname, "..", "..", "skills");
+
+  if (!existsSync(skillsDir)) {
+    return { skills: [], note: `skills dir not found at ${skillsDir}` };
+  }
+
+  try {
+    const entries = await readdir(skillsDir, { withFileTypes: true });
+    const skills: Array<{ name: string; description: string }> = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillMd = join(skillsDir, entry.name, "SKILL.md");
+      if (!existsSync(skillMd)) continue;
+      try {
+        const content = await readFile(skillMd, "utf-8");
+        // Parse YAML frontmatter description field
+        const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        let description = "";
+        if (fmMatch) {
+          const descMatch = fmMatch[1].match(/^description:\s*(.+)$/m);
+          if (descMatch) description = descMatch[1].trim();
+        }
+        skills.push({ name: entry.name, description });
+      } catch (err) {
+        process.stderr.write(`[code-intel-server] read SKILL.md failed for ${entry.name}: ${err}\n`);
+      }
+    }
+
+    return { skills };
+  } catch (err) {
+    process.stderr.write(`[code-intel-server] list-omcp-skills failed: ${err}\n`);
+    return { skills: [] };
+  }
+}
+
 // ── MCP server entry ────────────────────────────────────────────────────────
 //
 // Mirrors omx's `new Server({ name: 'omx-code-intel', version: '0.1.0' })`
@@ -681,6 +960,104 @@ runMcpServer({
         required: ["pattern", "replacement", "language"],
       },
       handler: handleAstGrepReplace,
+    },
+    {
+      name: "lsp_goto_definition",
+      description: "Find the definition of a symbol across the workspace using grep-based pattern matching.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Any file in the workspace (used to determine project root)" },
+          symbol: { type: "string", description: "Symbol name to find definition for" },
+        },
+        required: ["file", "symbol"],
+      },
+      handler: handleLspGotoDefinition,
+    },
+    {
+      name: "lsp_prepare_rename",
+      description: "Extract the word (identifier) under a given cursor position to prepare for rename.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Path to the source file" },
+          line: { type: "integer", description: "Line number (1-indexed)" },
+          character: { type: "integer", description: "Character position (0-indexed)" },
+        },
+        required: ["file", "line", "character"],
+      },
+      handler: handleLspPrepareRename,
+    },
+    {
+      name: "lsp_rename",
+      description: "Rename a symbol across a file or the entire workspace using word-boundary replacement. Does NOT use shell sed — pure Node fs read+write.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Path to the source file (anchor for workspace root)" },
+          oldName: { type: "string", description: "Current symbol name" },
+          newName: { type: "string", description: "New symbol name" },
+          scope: { type: "string", enum: ["file", "workspace"], description: "Scope of rename (default: file)" },
+        },
+        required: ["file", "oldName", "newName"],
+      },
+      handler: handleLspRename,
+    },
+    {
+      name: "lsp_code_actions",
+      description: "Get available code actions for a range (placeholder — returns empty list; full impl requires a language server).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          file: { type: "string", description: "Path to the source file" },
+          range: { type: "object", description: "Range in the file" },
+        },
+        required: ["file"],
+      },
+      handler: handleLspCodeActions,
+    },
+    {
+      name: "lsp_code_action_resolve",
+      description: "Resolve additional details for a code action (placeholder — returns action unchanged; full impl requires a language server).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          action: { type: "object", description: "Code action to resolve" },
+        },
+        required: ["action"],
+      },
+      handler: handleLspCodeActionResolve,
+    },
+    {
+      name: "deepinit_manifest",
+      description: "Recursively scan a directory and produce a manifest with file/dir counts, extension breakdown, and top directories.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          root: { type: "string", description: "Directory to scan" },
+          depth: { type: "integer", description: "Maximum scan depth (default: 3)" },
+        },
+        required: ["root"],
+      },
+      handler: handleDeepInitManifest,
+    },
+    {
+      name: "load_omcp_skills_local",
+      description: "Load locally defined skills from .omcp/skills/ in the current workspace.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+      handler: handleLoadOmcpSkillsLocal,
+    },
+    {
+      name: "list_omcp_skills",
+      description: "List all built-in omcp skills from the installation's skills/ directory, including their descriptions from SKILL.md frontmatter.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+      handler: handleListOmcpSkills,
     },
   ],
 }).catch((err) => {

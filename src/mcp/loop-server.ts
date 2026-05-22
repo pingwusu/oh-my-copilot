@@ -21,10 +21,9 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFileSync } from "../runtime/atomic-write.js";
 import { runMcpServer } from "./server-runtime.js";
 
 interface LoopEntry {
@@ -58,9 +57,7 @@ function load(): LoopQueue {
 
 function save(q: LoopQueue): void {
   mkdirSync(dirname(FILE), { recursive: true });
-  const tmp = `${FILE}.tmp`;
-  writeFileSync(tmp, JSON.stringify(q, null, 2));
-  renameSync(tmp, FILE);
+  atomicWriteFileSync(FILE, JSON.stringify(q, null, 2));
 }
 
 function upsert(entry: LoopEntry): void {

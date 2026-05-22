@@ -45,6 +45,34 @@ export async function runMcpServer(spec: ServerSpec): Promise<void> {
         content: [{ type: "text", text: `unknown tool: ${request.params.name}` }],
       };
     }
+    // Minimal schema validation: required fields + enum constraints.
+    const schema = tool.inputSchema as {
+      required?: string[];
+      properties?: Record<string, { type?: string; enum?: unknown[] }>;
+    };
+    if (schema.required) {
+      for (const field of schema.required) {
+        if (!(field in (args as Record<string, unknown>))) {
+          return {
+            isError: true,
+            content: [{ type: "text", text: `missing required field: ${field}` }],
+          };
+        }
+      }
+    }
+    if (schema.properties) {
+      for (const [field, def] of Object.entries(schema.properties)) {
+        if (def.enum && field in (args as Record<string, unknown>)) {
+          const val = (args as Record<string, unknown>)[field];
+          if (!def.enum.includes(val)) {
+            return {
+              isError: true,
+              content: [{ type: "text", text: `invalid value for ${field}: expected one of ${JSON.stringify(def.enum)}` }],
+            };
+          }
+        }
+      }
+    }
     try {
       const result = await tool.handler(args as Record<string, unknown>);
       return {

@@ -19,6 +19,8 @@ const SERVER_FILES: Record<string, string> = {
   "code-intel": "code-intel-server.js",
   hermes: "hermes-server.js",
   wiki: "wiki-server.js",
+  "python-repl": "python-repl-server.js",
+  "shared-memory": "shared-memory-server.js",
 };
 
 export interface ResolvedServer {

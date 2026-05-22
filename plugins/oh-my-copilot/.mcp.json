@@ -39,6 +39,11 @@
       "command": "node",
       "args": ["${PLUGIN_ROOT}/dist/mcp/wiki-server.js"],
       "description": "LLM Wiki knowledge base (wiki_ingest/query/lint/add/list/read/delete). Backed by .omcp/wiki/*.md with auto-maintained index."
+    },
+    "omcp-python-repl": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/python-repl-server.js"],
+      "description": "Python REPL: python_repl({ code, timeout_ms? }) — spawns python3/python, returns { stdout, stderr, exitCode, timedOut }."
     }
   }
 }

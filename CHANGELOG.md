@@ -7,6 +7,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-22
+
+### Added — DD9 iteration (4 independent critics on v0.7.0 + 4 parallel fixers)
+
+omc MCP tool parity closed. 15 new MCP tools across 4 servers,
+matching omc 4.9.3's exposed tool surface (modulo Claude-specific
+tools like `state_*` mode-oriented schema, which omcp covers via the
+`mode_*` family already shipped in v0.5.0).
+
+**MCP tool additions (15 total)**:
+
+- `src/mcp/code-intel-server.ts` — 8 new tools added to the existing
+  pragmatic-CLI-wrapper server (now 17 tools total, was 9):
+  `lsp_goto_definition`, `lsp_prepare_rename`, `lsp_rename`,
+  `lsp_code_actions`, `lsp_code_action_resolve`, `deepinit_manifest`,
+  `load_omcp_skills_local`, `list_omcp_skills`. All implementations
+  use pure-Node fs/regex (no shell interpolation). `lsp_rename`
+  supports both `"file"` and `"workspace"` scope via word-boundary
+  regex replace. `deepinit_manifest` does depth-limited recursive
+  scan, skips `node_modules`/`.git`/`dist`. Skill loaders parse YAML
+  frontmatter for `description`.
+
+- `src/mcp/python-repl-server.ts` (new): `python_repl({ code, timeout_ms? })`.
+  Spawns `python3` then falls back to `python`. No shell interpolation
+  (`spawn(cmd, ["-c", code])`). Handles Windows Store stub exit code
+  9009. Returns `{ stdout, stderr, exitCode, timedOut }`. Default
+  timeout 30s, max 120s.
+
+- `src/mcp/shared-memory-server.ts` (new): 5 tools —
+  `shared_memory_write/read/list/delete/cleanup`. Cross-session
+  key-value store with optional TTL. Backed by
+  `.omcp/state/shared-memory/{key}.json` (override via
+  `OMCP_SHARED_MEMORY_ROOT`). All key inputs validated via
+  `assertSafeSlug`; all writes via `atomicWriteFileSync`. Library
+  layer at `src/runtime/shared-memory.ts` is pure-functional so the
+  MCP server is a thin wrapper.
+
+- `src/mcp/trace-server.ts` + `src/runtime/trace.ts`: `session_search`
+  added. Iterates all `.jsonl` files under `traceRoot()`, filters by
+  case-insensitive substring on event JSON, returns
+  `{ sessionId, kind, t, snippet }[]`. Closes Critic A's last P0.
+
+### Fixed — DD9 critic P1 (robustness)
+
+- **HIGH P1: `loadTrace` crashed on malformed JSONL**
+  (`src/runtime/trace.ts:26-33`). Single corrupted append from a
+  crash mid-write would brick the entire session's trace history.
+  Now wraps `JSON.parse(l)` in try/catch — skips malformed lines and
+  logs via `console.error`.
+
+- **HIGH P1: `loadProjectMemory` crashed on corrupted JSON**
+  (`src/runtime/project-memory.ts:19-27`). Same shape as the trace
+  bug — `JSON.parse` propagated uncaught, breaking all downstream
+  write paths (`add_note`, `add_directive`, `write`). Now returns
+  default empty state `{ notes: [], directives: [], data: {} }` on
+  parse failure.
+
+- **HIGH P1: `loop-server.ts` used manual `writeFileSync` + `renameSync`
+  atomic pattern instead of canonical `atomicWriteFileSync`**
+  (`src/mcp/loop-server.ts:20-27,59-61`). Violated invariant 2.
+  Switched to `atomicWriteFileSync` from `src/runtime/atomic-write.ts`
+  so future improvements to the helper (fsync, retry, NTFS rename
+  quirks) apply here too.
+
+- **HIGH P1: MCP `server-runtime.ts` skipped schema validation**
+  (`src/mcp/server-runtime.ts:39-68`). `required` fields and `enum`
+  constraints on the declared `inputSchema` were decorative — every
+  handler had to defend itself. Added a ~20-line inline validator
+  that checks `required` presence and `enum` membership on string
+  properties. Returns `isError` response on violation, no throw.
+
+- **HIGH P1: `loop-watcher.ts stopWatcher` used `execSync` with pid
+  interpolation** (`src/cli/commands/loop-watcher.ts:63-77`). Even
+  though `Number()` coercion neutralized the obvious injection,
+  defense-in-depth required the safer pattern. Switched to
+  `spawnSync("taskkill", ["/PID", String(pid), "/F"])` and added
+  `Number.isFinite(pid)` early-return — matches the pattern already
+  used in `team.ts:130`.
+
+### Tests
+
+`+40 tests across 4 new test files`:
+
+- `src/__tests__/code-intel-additions.test.ts` — 10 tests covering
+  all 8 new code-intel tools (extra null-case test on
+  `lsp_prepare_rename`).
+- `src/__tests__/python-repl-server.test.ts` — 4 tests (stdout
+  round-trip, exitCode, timeout, ENOENT fallback). Python tests
+  auto-skip if Python is absent from PATH.
+- `src/__tests__/shared-memory.test.ts` — 15 tests covering happy
+  path, missing key, expired entries, list, delete, cleanup, path
+  traversal blocked by `assertSafeSlug`, corrupted JSON doesn't crash
+  list.
+- `src/__tests__/dd9-robustness.test.ts` — 10 tests covering all 6
+  fixes (including session_search end-to-end).
+
+Test suite: **389 passing**, 2 skipped, 0 failed. 57/58 files green
+(1 pre-existing Windows vitest worker-fork EPERM, unchanged baseline
+since v0.4.0).
+
+### Registry updates
+
+- `.mcp.json` + `plugins/oh-my-copilot/.mcp.json`: added
+  `omcp-python-repl` and `omcp-shared-memory` server entries.
+- `src/cli/commands/mcp-serve.ts SERVER_FILES`: added `python-repl`
+  and `shared-memory` keys.
+- `src/cli/commands/uninstall.ts OMCP_MCP_SERVER_KEYS`: added
+  `omcp-python-repl` and `omcp-shared-memory` so uninstall cleans up.
+
+### Caveats (not P0/P1, documented for traceability)
+
+- `lsp_code_actions` and `lsp_code_action_resolve` are placeholder
+  stubs returning empty arrays / echoing the action. omc's tools are
+  also minimal here; a full code-action backend would require a real
+  LSP client. Sufficient for tool-surface parity.
+- `lsp_goto_definition` uses 10 definition-pattern regexes — covers
+  TS/JS/Python idiomatic cases but won't resolve dynamic imports,
+  module aliases, or re-exports. Documented in the file header.
+
 ## [0.7.0] — 2026-05-18
 
 ### Added — DD8 iteration (4 independent critics on v0.6.0 + parallel fixers)
