@@ -114,7 +114,7 @@ describe("code-intel MCP server round-trip", () => {
     // tmp dir cleanup is OS-driven; tests shouldn't leave large data
   });
 
-  it("exposes the 9 original tools (now 17 total with DD9 additions)", async () => {
+  it("exposes the 9 original tools (now 18 total with DD9 + DD10 additions)", async () => {
     const client = new McpClient(SERVER, {});
     try {
       await client.initialize();
@@ -133,7 +133,7 @@ describe("code-intel MCP server round-trip", () => {
           "ast_grep_replace",
         ]),
       );
-      expect(names).toHaveLength(17);
+      expect(names).toHaveLength(18);
     } finally {
       client.close();
     }

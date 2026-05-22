@@ -59,7 +59,15 @@ export function searchSessions(
   for (const entry of readdirSync(root)) {
     if (!entry.endsWith(".jsonl")) continue;
     const sessionId = entry.slice(0, -".jsonl".length);
-    const raw = readFileSync(join(root, entry), "utf8");
+    // DD10 Critic-B P1 fix: one unreadable file (perm denied, Windows file
+    // lock) used to abort the whole search. Skip and continue instead.
+    let raw: string;
+    try {
+      raw = readFileSync(join(root, entry), "utf8");
+    } catch (err) {
+      console.error(`[trace] searchSessions: skip unreadable ${entry}: ${(err as Error).message}`);
+      continue;
+    }
     for (const line of raw.split(/\r?\n/)) {
       if (!line.trim()) continue;
       if (!line.toLowerCase().includes(lq)) continue;

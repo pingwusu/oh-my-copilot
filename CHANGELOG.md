@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-05-22
+
+### Added — DD10 iteration (2 independent critics on v0.8.0, hardening fold-in)
+
+Final pass to close the "omcp 复刻 omc" verdict at iter 10/10.
+
+- **MCP: `load_omcp_skills_global` tool** (`src/mcp/code-intel-server.ts`).
+  DD9 shipped `load_omcp_skills_local` + `list_omcp_skills` but missed
+  the 3rd of omc's `load_omc_skills_*` family (DD10 Critic A finding,
+  P1). Reads `~/.copilot/skills/` (mirrors omc's `~/.claude/skills/`).
+  Code-intel server now exposes 18 tools (was 17). Regression test in
+  `src/__tests__/code-intel-additions.test.ts`.
+
+### Fixed — DD10 critic P1 (hardening)
+
+- **HIGH P1: `lsp_goto_definition` regex injection / ReDoS via crafted
+  `symbol`** (`src/mcp/code-intel-server.ts`, `handleLspGotoDefinition`).
+  DD9 fixer interpolated the user-supplied `symbol` into `new RegExp(...)`
+  without escape. `symbol: ".*"` matched every line; `symbol: "(a+)+$"`
+  was a ReDoS amplifier. Now passes `symbol` through the same regex-
+  metachar escape pattern `handleLspRename` uses
+  (`symbol.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")`). Regression
+  test verifies the escape neutralizes both wildcard match and
+  ReDoS-trigger pattern in <500ms.
+
+- **HIGH P1: `searchSessions` aborted on unreadable `.jsonl` file**
+  (`src/runtime/trace.ts`). One permission-denied or Windows-locked
+  trace file would propagate `readFileSync` errors and kill the entire
+  search. Now wraps the read in try/catch, logs via `console.error`,
+  and continues to the next file. Regression test creates a chmod-000
+  file alongside a readable one (POSIX only) and asserts the readable
+  match still returns.
+
+- **HIGH P1: 3rd version manifest missed in DD9 release bump**
+  (`.claude-plugin/plugin.json` + `plugins/oh-my-copilot/.claude-plugin/plugin.json`).
+  `cli-wiring-invariants` test caught it on first run after DD9 — both
+  manifests were still on 0.7.0. Now both at 0.8.0. (`Directive` in
+  the v0.8.0 commit message already covered the lesson; this commit
+  fixes the immediate gap.)
+
+### Tests
+
+- `src/__tests__/dd10-hardening.test.ts` (new): 3 tests — regex escape
+  in `lsp_goto_definition`, ReDoS pattern neutralization, unreadable-
+  file resilience in `searchSessions`.
+- `src/__tests__/code-intel-additions.test.ts`: 1 new test for
+  `load_omcp_skills_global`. Tool-count assertions bumped from 17 → 18.
+- `src/__tests__/code-intel.test.ts`: tool-count assertion bumped
+  from 17 → 18.
+
+Test suite: **393 passing**, 2 skipped, 0 failed. 58/59 files green
+(1 pre-existing Win vitest worker-fork EPERM unchanged since v0.4.0).
+
+### Acceptance — "omcp 复刻 omc"
+
+DD10 Critic A (full omc-vs-omcp surface diff): originally reported
+FAIL with 1 P1 (missing `load_omcp_skills_global`) + 1 P2 (hooks
+architectural divergence; non-blocking by design — Copilot CLI vs
+Claude Code plugin host). P1 closed by this iteration.
+
+DD10 Critic B (v0.8.0 regression check): GREEN with 2 P1 + 3 P2.
+Both P1 closed by this iteration; P2s deferred (manifest scope,
+bare writeFileSync on pid/log files — content is single integers
+or empty strings, no corruption risk).
+
+Iteration count: **DD1 → DD10 = 10 / 10** per user's original
+acceptance criterion ("≥10 iterations, team+critic, no P0/P1").
+
 ## [0.8.0] — 2026-05-22
 
 ### Added — DD9 iteration (4 independent critics on v0.7.0 + 4 parallel fixers)

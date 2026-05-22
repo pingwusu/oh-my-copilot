@@ -131,10 +131,11 @@ describe("code-intel additions (DD9 parity)", () => {
           "lsp_code_action_resolve",
           "deepinit_manifest",
           "load_omcp_skills_local",
+          "load_omcp_skills_global",
           "list_omcp_skills",
         ]),
       );
-      expect(names).toHaveLength(17);
+      expect(names).toHaveLength(18);
     } finally {
       client.close();
     }
@@ -316,6 +317,23 @@ describe("code-intel additions (DD9 parity)", () => {
       })) as ToolResp;
       const out = parseToolJson(resp) as { skills: unknown[] };
       // May be empty (no .omcp/skills in project root) or populated — either is valid
+      expect(Array.isArray(out.skills)).toBe(true);
+    } finally {
+      client.close();
+    }
+  });
+
+  it("load_omcp_skills_global returns an array (DD10 Critic-A P1 parity)", async () => {
+    const client = new McpClient(SERVER);
+    try {
+      await client.initialize();
+      const resp = (await client.call("tools/call", {
+        name: "load_omcp_skills_global",
+        arguments: {},
+      })) as ToolResp;
+      const out = parseToolJson(resp) as { skills: unknown[] };
+      // ~/.copilot/skills/ may or may not exist on the test host — either is
+      // valid; we only require the tool to return an array (not crash).
       expect(Array.isArray(out.skills)).toBe(true);
     } finally {
       client.close();

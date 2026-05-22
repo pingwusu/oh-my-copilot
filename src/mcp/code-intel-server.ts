@@ -20,6 +20,7 @@
 //   - lsp_code_action_resolve   : stub (placeholder)
 //   - deepinit_manifest         : recursive directory manifest
 //   - load_omcp_skills_local    : read .omcp/skills/ local skills
+//   - load_omcp_skills_global   : read ~/.copilot/skills/ global skills
 //   - list_omcp_skills          : list skills/ from omcp installation
 //
 // Binary detection: tries `sg`, then `ast-grep`, then `npx @ast-grep/cli`.
@@ -582,7 +583,10 @@ async function handleLspGotoDefinition(args: Record<string, unknown>): Promise<u
   const file = args.file as string | undefined;
   const symbol = args.symbol as string | undefined;
   if (!file || !symbol) return { error: "file and symbol are required" };
-  const symbolStr: string = symbol;
+  // DD10 Critic-B P1 fix: escape regex metacharacters in symbol — without
+  // this, `symbol: ".*"` matches every line and `symbol: "(a+)+$"` triggers
+  // ReDoS. Same escape pattern used in handleLspRename below.
+  const symbolStr: string = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   // Search workspace rooted at project root; fall back to file's directory
   const dir = findProjectRoot(existsSync(file) ? join(file, "..") : file);
@@ -786,6 +790,28 @@ async function handleLoadOmcpSkillsLocal(_args: Record<string, unknown>): Promis
     return { skills };
   } catch (err) {
     process.stderr.write(`[code-intel-server] load-omcp-skills-local failed: ${err}\n`);
+    return { skills: [] };
+  }
+}
+
+async function handleLoadOmcpSkillsGlobal(_args: Record<string, unknown>): Promise<unknown> {
+  // DD10 Critic-A P1 fix: omc has 3 skills tools (local/global/list);
+  // DD9 shipped only 2. Global skills live at ~/.copilot/skills/ —
+  // mirrors omc's ~/.claude/skills/ convention.
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  if (!home) return { skills: [] };
+  const skillsDir = join(home, ".copilot", "skills");
+  if (!existsSync(skillsDir)) {
+    return { skills: [] };
+  }
+  try {
+    const entries = await readdir(skillsDir, { withFileTypes: true });
+    const skills = entries
+      .filter((e) => e.isFile() || e.isDirectory())
+      .map((e) => ({ name: basename(e.name, extname(e.name)), path: join(skillsDir, e.name) }));
+    return { skills };
+  } catch (err) {
+    process.stderr.write(`[code-intel-server] load-omcp-skills-global failed: ${err}\n`);
     return { skills: [] };
   }
 }
@@ -1040,6 +1066,12 @@ runMcpServer({
         required: ["root"],
       },
       handler: handleDeepInitManifest,
+    },
+    {
+      name: "load_omcp_skills_global",
+      description: "Read skills from the user's global ~/.copilot/skills/ directory.",
+      inputSchema: { type: "object", properties: {} },
+      handler: handleLoadOmcpSkillsGlobal,
     },
     {
       name: "load_omcp_skills_local",
