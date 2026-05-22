@@ -1,6 +1,6 @@
-# omcp 续接 handoff (post-v0.10.0)
+# omcp 续接 handoff (post-v0.11.0)
 
-**Updated**: 2026-05-22 late-afternoon
+**Updated**: 2026-05-22 late-afternoon (post Phase 5 + Phase 6 milestone)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
 **Latest commit**: `(commit hash filled at milestone commit)` v0.10.0 release
 
@@ -19,11 +19,12 @@ then shipped Phase 1 + Phase 2 (partial) of the v3 hooks-parity plan as **v0.10.
 | Phase 2 Batch B | ✓ committed | preemptive-compaction hook + tests (+20) | b7a423b |
 | Phase 1 smoke verdict | ✓ committed | FAIL (with caveat — hooks don't fire in `-p` mode); harness + verdict doc | 6a2606e |
 | v0.10.0 release | ✓ committed | version bump 4 manifests + CHANGELOG | (this commit) |
-| Phase 2 Batch C | **DEFERRED** | persistent-mode + todo-continuation + omc-orchestrator — depend on unported omcp subsystems | — |
-| Phase 3 | **PENDING** | subagent lifecycle + session hooks (20 shell hooks) | — |
+| Phase 5 | ✓ committed | interrupt-only cost-governor + loop-detector + audit-logger (+37 tests) | 4883e96 |
+| Phase 6 | ✓ committed | error-aggregator + auto-recovery-advisor + notification-dispatcher + idle-alert (+32 tests) | ad6a8f1 |
+| v0.11.0 release | ✓ committed | 4 manifests + CHANGELOG + this HANDOFF | (this commit) |
+| Phase 2 Batch C | **DEFERRED — strategy chosen: Option A** | port omc subsystems first (worktree-paths → ralph state → ultrawork → …), THEN port persistent-mode + todo-continuation + omc-orchestrator. Estimated 2-3 sessions. | — |
+| Phase 3 | **PENDING** | subagent lifecycle + session hooks (20 shell hooks); several Phase 3 hooks depend on Phase 2 Batch C subsystems being in place | — |
 | Phase 4 | **DOWNGRADED** | hallucination-shield → advise-only per Architect condition 1 (smoke FAIL) | — |
-| Phase 5 | **PENDING** | interrupt-only cost governor + loop detector + audit logger | — |
-| Phase 6 | **PENDING** | error-aggregator + auto-recovery-advisor + Notification dispatch | — |
 | Phase 7 | **GATED** | modifiedArgs surgeon mode — needs own empirical gate in interactive mode | — |
 
 ---
@@ -184,30 +185,50 @@ depend on `-p`-mode hook firing.
 1. **Read** this HANDOFF.md + `docs/plans/hooks-parity-v3.md` (the iter-4 final plan) +
    `docs/plans/phase-2-deferred-hooks.md` + `docs/architecture/hooks-modifiedresult-verification.md`.
 
-2. **`git status` + `git log -5`** to verify state matches this handoff. **Do NOT trust the handoff blindly.**
+2. **`git status` + `git log -10`** to verify state matches this handoff. **Do NOT trust the handoff blindly.**
 
-3. **Critical empirical question:** Manually launch `copilot` in interactive TUI mode and run the smoke probe.
-   If hooks fire there but not in `-p`, that's a major scope clarification — omcp's hook subsystem is
-   interactive-only. If hooks ALSO don't fire in TUI mode, that's a deeper bug — omcp needs to either fix the
-   wiring or redesign the anti-hallucination architecture entirely.
+3. **Critical empirical question:** Manually launch `copilot` in interactive TUI mode and run the smoke probe
+   at `scripts/smoke/run-modifiedresult-smoke.mjs` (or a manual variant adapted to TUI). If hooks fire there
+   but not in `-p`, omcp's hook subsystem is interactive-only — a major scope clarification. If hooks ALSO
+   don't fire in TUI mode, that's a deeper bug — omcp needs to either fix the wiring or redesign the
+   anti-hallucination architecture entirely.
 
-4. **Phase 2 Batch C decision** — pick option A (port subsystems first), B (thin omcp-native variants), or
-   C (defer entirely) from `docs/plans/phase-2-deferred-hooks.md`. The user's emphasis on anti-hallucination
-   suggests Option A or B, not C.
+4. **Phase 2 Batch C — Option A execution starts here** (user chose Option A 2026-05-22).
+   Multi-session work, estimated 2-3 sessions. Suggested ordering:
 
-5. **Phase 3 — 20 shell hooks** (subagent lifecycle + session hooks). Largely 1:1 ports from omc; some
-   (subagent-tracker) need omcp's own state schema first.
+   **Session N+1 (foundational):**
+   - Port `lib/worktree-paths` from omc → omcp `src/lib/worktree-paths.ts`. Foundational dependency
+     for almost everything else.
+   - Define omcp ralph state schema at `src/lib/ralph-state.ts` — `{active, iteration, lastFiredAt,
+     prompt, prdPath, architectApproved?}` JSON file at `.omcp/state/ralph-state.json` with atomic
+     write + safe reader. Port `readRalphState`, `writeRalphState`, `incrementRalphIteration`,
+     `clearRalphState`, `getPrdCompletionStatus`, `getRalphContext`, `detectArchitectApproval`,
+     `detectArchitectRejection` from `omc/src/hooks/ralph/`.
+   - Define omcp ultrawork state schema (`src/lib/ultrawork-state.ts`). Port readers from
+     `omc/src/hooks/ultrawork/`.
+   - Define omcp todo-continuation state (or wire to Copilot's todo API if exposed).
+   - Define omcp boulder-state schema (`src/lib/boulder-state.ts`).
+   - In-process notepad state (`src/lib/notepad-state.ts`) — backs the existing `notepad_*` MCP tools.
 
-6. **Phase 5 — interrupt-only cost governor + loop detector + audit logger.** Does not depend on
-   `modifiedArgs`/`modifiedResult`; should ship cleanly regardless of smoke verdict.
+   **Session N+2 (the deferred hooks):**
+   - Port `persistent-mode` (~1255 lines in omc → likely ~600-800 lines in omcp after subsystem
+     replacements). Stop event. Reads ralph/ultrawork/todo-continuation/team-pipeline state to decide
+     when to inject continuation prompts.
+   - Port `todo-continuation` (~615 → ~400 lines). Stop event. Reads omcp todo state, returns advise
+     when pending tasks remain.
+   - Port `omc-orchestrator` (~574 → ~400 lines). PreToolUse + PostToolUse. Uses notepad-state +
+     boulder-state to enforce delegation patterns.
+   - Acceptance: NO references to `~/.claude/` paths in any ported hook. Cross-check with grep.
 
-7. **Phase 6 — error-aggregator + Notification dispatch.** Wire to existing `src/hooks/background-notifications.ts`.
+5. **Phase 3 — 20 shell hooks** (subagent lifecycle + session hooks). Mostly 1:1 ports but several
+   depend on Phase 2 Batch C subsystems (subagent-tracker, verify-deliverables). Do Phase 3 after
+   Batch C lands.
 
-8. **Phase 4 — hallucination shield (advise-only fallback per smoke FAIL).** Lower priority — ships only annotations,
-   no replacement.
+6. **Phase 4 — hallucination shield (advise-only fallback per smoke FAIL).** Lower priority — ships only
+   annotations via advise, no `modifiedResult` replacement. Can be done independently of Phase 2 Batch C.
 
-9. **Phase 7 — modifiedArgs surgeon mode.** Needs its own empirical gate (in interactive mode) before any
-   work begins.
+7. **Phase 7 — modifiedArgs surgeon mode.** Needs its own empirical gate (in interactive mode) before any
+   work begins. Deferred until step 3 confirms hooks fire in TUI mode at all.
 
 ---
 

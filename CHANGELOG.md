@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-05-22
+
+### Added — Phase 5 + Phase 6 hooks from hooks-parity v3 plan
+
+Ships the interrupt-only governance hooks and the telemetry hooks. Both
+batches were unaffected by the Phase 1 smoke FAIL because they don't
+depend on `modifiedArgs` or `modifiedResult` — they use already-validated
+`block`/`interrupt`/append-only patterns.
+
+**Phase 5 — interrupt-only cost governor + audit (commit 4883e96):**
+
+- `src/hooks/cost-governor/` — cumulative tool-call counter, configurable
+  budget (default 1000, OMCP_COST_BUDGET env), `{kind:"interrupt"}` at
+  threshold. PermissionRequest event. 9 tests.
+- `src/hooks/loop-detector/` — rolling-window signature detector
+  (default window 10, threshold 5; OMCP_LOOP_THRESHOLD + OMCP_LOOP_WINDOW
+  env). SHA-256 of stable-JSON args (key-order independent). PreToolUse
+  event. `{kind:"interrupt"}` at threshold repeats. 13 tests.
+- `src/hooks/audit-logger/` — append-only `.omcp/state/audit/{sessionId}.jsonl`
+  with 5 MB rotation. PreToolUse + PostToolUse + PostToolUseFailure
+  events. toolArgs clamped to 2000 chars; toolResult presence logged
+  (value NOT logged for privacy + size). Always `{kind:"noop"}`. 15 tests.
+
+Per Architect iter-3 condition 2, modifiedArgs work (bash-safety-net,
+surgeon-mode middleware chain) is DEFERRED to Phase 7 with its own
+empirical smoke gate.
+
+**Phase 6 — telemetry: ErrorOccurred + Notification (commit ad6a8f1):**
+
+- `src/hooks/error-aggregator/` — append `.omcp/state/errors.jsonl`
+  per ErrorOccurred fire (10 MB rotation). Schema includes ts /
+  sessionId / toolName / errorMessage / errorStack. Always `{kind:"noop"}`.
+  7 tests.
+- `src/hooks/auto-recovery-advisor/` — reads last N entries of
+  errors.jsonl (default 20, OMCP_RECOVERY_WINDOW env); detects recurring
+  patterns (first 80 chars seen ≥3 times, OMCP_RECOVERY_RECURRENCE_THRESHOLD
+  env); returns `{kind:"advise"}` with the pattern + recovery suggestion.
+  9 tests.
+- `src/hooks/notification-dispatcher/` — wires Notification events to
+  the existing `dispatchNotificationInBackground` in
+  `src/hooks/background-notifications.ts`. Also logs to
+  `.omcp/state/notifications.jsonl`. Graceful degrade on dispatch
+  failure. 7 tests (uses vi.mock for the dispatcher).
+- `src/hooks/idle-alert/` — per-session last-Notification timestamp at
+  `.omcp/state/idle-alert/{sessionId}.json` (atomicWriteFileSync).
+  Returns `{kind:"advise"}` when gap > threshold (default 300_000 ms,
+  OMCP_IDLE_ALERT_THRESHOLD_MS env). 9 tests.
+
+### Notes
+
+- Test suite: 460 (v0.10.0) → 532 passing (+72), 2 skipped, 0 failed.
+  1 unhandled vitest worker EPERM is the pre-existing Windows baseline.
+- All 7 new hooks live as disjoint dirs under `src/hooks/`. No changes
+  to `hook-types.ts`, `runtime.ts`, or `background-notifications.ts`
+  (READ-ONLY consumer for notification-dispatcher).
+- Phase 1 smoke verdict (FAIL — hooks don't fire in `-p` mode) means
+  none of these hooks have live integration tests yet. Unit tests cover
+  all logic paths; runtime verification waits for a future interactive
+  TUI session.
+
+### Phase 2 Batch C decision (recorded for next session)
+
+User chose **Option A**: port the missing omc subsystems first
+(`lib/worktree-paths`, ralph state schema, ultrawork, autopilot,
+team-pipeline, subagent-tracker, boulder-state, notepad in-process
+state), THEN port persistent-mode + todo-continuation + omc-orchestrator.
+Estimated 2-3 sessions. See `docs/plans/phase-2-deferred-hooks.md` for
+full dependency analysis.
+
 ## [0.10.0] — 2026-05-22
 
 ### Added — Phase 1 foundation + Phase 2 batches A/B from hooks-parity v3 plan
