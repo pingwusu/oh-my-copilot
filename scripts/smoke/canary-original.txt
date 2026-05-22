@@ -1,0 +1,5 @@
+SENTINEL_ORIGINAL_PAYLOAD_BANDIT_77
+This is the actual file content on disk. If a PostToolUse modifiedResult hook
+is applied, the model should NOT see this exact phrase. Instead it should
+see the canary string emitted by the hook.
+END_SENTINEL_ORIGINAL_PAYLOAD_BANDIT_77
