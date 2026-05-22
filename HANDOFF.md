@@ -1,235 +1,170 @@
-# omcp 续接 handoff (post-v0.9.1 / ralplan-iter-3-in-progress)
+# omcp 续接 handoff (post-v0.10.0)
 
-**Updated**: 2026-05-22 mid-afternoon
-**Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel
-`oh-my-copilot/`)
-**Latest commit**: `6934357` (v0.9.1 P0 fix). Working tree had 2 uncommitted
-files at handoff time (the v3 plan promotion below); see "What to commit
-first" below.
+**Updated**: 2026-05-22 late-afternoon
+**Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
+**Latest commit**: `(commit hash filled at milestone commit)` v0.10.0 release
 
 ---
 
 ## TL;DR for the next agent
 
-This session executed 3 milestones across one continuous flow:
+This session executed the **ralplan iter-3 → iter-4 consensus loop** to APPROVE/APPROVE/APPROVE,
+then shipped Phase 1 + Phase 2 (partial) of the v3 hooks-parity plan as **v0.10.0**.
 
-1. **DD9 → v0.8.0** (commit `86fb9de`): 4 parallel critics + 4 fixers on
-   v0.7.0. Added 15 MCP tools (8 code-intel + python_repl + 5
-   shared_memory + session_search), 5 P1 robustness fixes. omc MCP
-   tool-surface parity closed.
-
-2. **DD10 → v0.9.0** (commit `67c4073`): 2 critics + 1 fixer
-   round on v0.8.0. Added `load_omcp_skills_global` (closes the last
-   skills tool family member). Fixed 2 P1 regressions
-   (lsp_goto_definition regex injection, searchSessions unreadable-file
-   crash). User's original "omcp 复刻 omc + ≥10 iterations" criterion
-   **declared satisfied for omc parity**.
-
-3. **Hook-system rabbit hole → v0.9.1 P0 fix** (commit `6934357`):
-   User asked to fill the orchestrator/hooks gap and explicitly noted
-   "copilot 也有很多 hook ... agentstop 的 hook ... 应该也支持
-   orchestrate". A 3-agent research wave (official Copilot docs +
-   Claude-side cross-ref + empirical `app.js` `aWr`-Set extraction)
-   proved **Copilot CLI has 13 hook events, not 6** — and v0.4.0
-   through v0.9.0 had been writing Claude-Code event names
-   (`PreSubmit`/`PostSubmit`/`PreEnd`) into `~/.copilot/settings.json`
-   that Copilot silently dropped. 3 of 6 omcp-managed hooks had been
-   dead in production this whole time. v0.9.1 corrects the
-   `OMCP_HOOK_EVENTS` constant, expands `HookEvent` to all 13 valid
-   names, ships `COPILOT_VALID_EVENTS` enum + regression test.
-
-A v3 hooks-parity plan was written (ralplan iter-3) and Architect
-returned APPROVE-with-3-conditions. **Critic iter-3 was not run before
-this handoff** — see "What's mid-flight" below.
-
----
-
-## What to commit FIRST (next session, before anything else)
-
-The session ended with the v3 plan promoted into `docs/plans/` (tracked
-path) but NOT committed:
-
-```
-docs/plans/hooks-parity-v3.md            (NEW)
-docs/plans/hooks-parity-open-questions.md (NEW)
-```
-
-These exist because `.omc/` is in `.gitignore`, so the Planner's v3
-plan output would otherwise have died with the session. Commit them as
-a docs-only commit before doing any code work:
-
-```bash
-git add docs/plans/
-git commit -m "docs: promote v3 hooks-parity plan + open questions to tracked path"
-```
-
----
-
-## What's mid-flight (ralplan iter-3 status)
-
-The ralplan consensus loop on the hooks-parity plan is at iteration 3
-of max 5:
-
-| Iter | Planner | Architect | Critic |
+| Phase | Status | Deliverable | Commit |
 |---|---|---|---|
-| 1 | DRAFT (Option C+ approximation layer) | objected (dead `Task` mapping, missing hooks, timeout) | **ITERATE** (advise unverified, inventory incomplete, library-vs-hook conflation) |
-| 2 | REVISED (Step 0 gate, all-31-hooks, library section, pre-mortem) | **APPROVE-with-notes** | **APPROVE** (3 notes folded as polish) |
-| (mid-iter)| (user pushed back: "copilot 也有 hook") | — | — |
-| (research wave) | 3 parallel agents confirmed user right: 13 events not 6 | — | — |
-| 3 | REWRITTEN as Option D (1:1 direct port + Copilot-advantage exploitation, HookResult 3→6 variants, 6 phases) | **APPROVE-with-3-conditions** | **NOT YET RUN** |
-
-**To finish ralplan**: next session should dispatch Critic iter-3 with
-the Architect's iter-3 report as input. If Critic APPROVE → start
-Phase 1. If ITERATE → Planner iter-4.
-
-### Architect iter-3 conditions (must fold into v3 plan or address before execution)
-
-1. **Phase 1 must include a `modifiedResult` smoke test as a hard gate.**
-   v3 assumes Copilot's `modifiedResult` field REPLACES tool output in
-   the model's context (distinct from `additionalContext` which APPENDS).
-   This replacement semantics is undocumented and not yet verified.
-   If smoke test fails, Phases 4-5 must revert to v2-style advise-only
-   fallback.
-
-2. **Surgeon mode (`modifiedArgs` + `modifiedResult` middleware) → Phase 7+ future work**, not v1. Both behaviors need empirical
-   validation. Hallucination-shield (`modifiedResult` alone) and
-   interrupt-only cost governor are realistic v1; arg-rewriting cost
-   optimizer is speculative.
-
-3. **`persistent-mode` reclassify from SIMPLE → MEDIUM.** omc's
-   `persistent-mode/index.ts` has Claude-specific dependencies:
-   `getClaudeConfigDir()` (lines 16/378/404) reads `~/.claude/`; lines
-   313-425 scan Claude transcript JSON for context-percent estimation
-   and architect approval detection. Copilot does not expose
-   transcript content in the same format — this code path needs
-   rewriting against omcp's own state files.
+| v3 plan iter-4 | ✓ committed | Architect 3 conditions + Critic 5 edits + 3 cosmetic polish items folded into `docs/plans/hooks-parity-v3.md` | dae5016 |
+| Phase 1 foundation | ✓ committed | OMCP_HOOK_EVENTS 5→13, HookResult 3→6, runtime plumbing, +17 tests | 4fb8cd1 |
+| Phase 2 Batch A | ✓ committed | factcheck library + sentinel-gate library + tests (+25) | 7b00ada |
+| Phase 2 Batch B | ✓ committed | preemptive-compaction hook + tests (+20) | b7a423b |
+| Phase 1 smoke verdict | ✓ committed | FAIL (with caveat — hooks don't fire in `-p` mode); harness + verdict doc | 6a2606e |
+| v0.10.0 release | ✓ committed | version bump 4 manifests + CHANGELOG | (this commit) |
+| Phase 2 Batch C | **DEFERRED** | persistent-mode + todo-continuation + omc-orchestrator — depend on unported omcp subsystems | — |
+| Phase 3 | **PENDING** | subagent lifecycle + session hooks (20 shell hooks) | — |
+| Phase 4 | **DOWNGRADED** | hallucination-shield → advise-only per Architect condition 1 (smoke FAIL) | — |
+| Phase 5 | **PENDING** | interrupt-only cost governor + loop detector + audit logger | — |
+| Phase 6 | **PENDING** | error-aggregator + auto-recovery-advisor + Notification dispatch | — |
+| Phase 7 | **GATED** | modifiedArgs surgeon mode — needs own empirical gate in interactive mode | — |
 
 ---
 
-## v3 plan summary (read `docs/plans/hooks-parity-v3.md` for full)
+## Critical empirical finding (Phase 1 smoke verdict)
 
-**Recommended option**: **D — direct 1:1 native port + Copilot-advantage
-exploitation**. Supersedes v2's "Option C+ approximation layer", which was
-predicated on the false 6-event assumption.
+**Copilot CLI 1.0.48 in `copilot -p` non-interactive mode does NOT fire ANY hooks** — verified across
+6 event-name variants (`postToolUse` + `PostToolUse` + `preToolUse` + `PreToolUse` + `userPromptSubmitted` +
+`UserPromptSubmit`) × 2 probe shapes (Node `.mjs` and stripped-down `.cmd`) × valid matcher `"*"`. The probe
+log file (`~/.copilot/omcp-smoke-probe.log`) never appeared on any run.
 
-**13 valid Copilot events** (both camelCase + PascalCase aliases work,
-except `subagentStart` is camelCase-only):
+The bundle (`@github/copilot/app.js`) does contain hook-execution machinery (`HookCommandWarningError`,
+`HookExitCodeError`, `postToolUseFailure` integration). So hooks ARE implemented — they just don't fire in
+`-p` mode, at least not as-configured via the matcher-style hooks section.
 
-| Internal key | PascalCase alias | Maps to Claude event |
-|---|---|---|
-| sessionStart | SessionStart | SessionStart |
-| sessionEnd | SessionEnd | SessionEnd |
-| userPromptSubmitted | UserPromptSubmit | UserPromptSubmit |
-| preToolUse | PreToolUse | PreToolUse |
-| postToolUse | PostToolUse | PostToolUse |
-| postToolUseFailure | PostToolUseFailure | PostToolUseFailure |
-| errorOccurred | ErrorOccurred | **(Copilot-only)** |
-| agentStop | **Stop** (no "AgentStop") | Stop |
-| subagentStop | SubagentStop | SubagentStop |
-| subagentStart | **(no PascalCase alias!)** | SubagentStart |
-| preCompact | PreCompact | PreCompact |
-| permissionRequest | PermissionRequest | PermissionRequest |
-| notification | Notification | **(Copilot-only)** |
+**Implications for the next session:**
 
-**Copilot has 3 capabilities Claude lacks (USER-PRIORITIZED)**:
+1. omcp's hook infrastructure may be **interactive-mode-only**. If the user runs `copilot -p "..."` for
+   scripting workflows, omcp's hook-based features (skill injection, persistent-mode, etc.) won't fire.
+2. The omcp regression test `copilot-hook-events-validation.test.ts` verifies event NAMES are valid but
+   never verifies hooks actually FIRE end-to-end. A real integration test would need to run a Copilot TUI
+   session which is difficult to script.
+3. **Recommended next step:** manually launch `copilot` (TUI), pre-wire the probe at `~/.copilot/config.json`
+   `hooks.postToolUse`, send a prompt that uses a real tool, then check `~/.copilot/omcp-smoke-probe.log`.
+   If it has entries → hooks DO fire in interactive mode, and the next test is whether `modifiedResult`
+   replaces or appends.
+4. Per Architect iter-3 condition 1 (FAIL branch): **Phase 4 hallucination-shield ships as advise-only fallback**.
+   This is forward-compatible — a future PASS verdict in interactive mode could upgrade Phase 4 to true
+   replacement semantics.
 
-- `preToolUse.modifiedArgs` — rewrite tool arguments before execution
-- `postToolUse.modifiedResult` — **rewrite tool output BEFORE the model sees it** (★ most powerful — enables proactive hallucination shield)
-- `permissionRequest.interrupt: true` — hard-stop the agent
-
-**6-phase execution plan**:
-
-| Phase | Scope | Status |
-|---|---|---|
-| 1 | P0 cleanup + foundation + modifiedResult smoke test | P0 part DONE (v0.9.1). Smoke test PENDING. |
-| 2 | Anti-hallucination core ports (persistent-mode, factcheck, sentinel-gate, todo-continuation, omc-orchestrator) — 1:1 direct mapping | PENDING |
-| 3 | Subagent lifecycle (subagentStart/Stop direct port — NO LONGER DEFERRED) + verify-deliverables | PENDING |
-| 4 | Hallucination shield (modifiedResult-based pre-rewrite of suspicious tool outputs) | GATED on Phase 1 smoke test |
-| 5 | Cost governor (interrupt-only v1; modifiedArgs-downgrade speculatively Phase 7+) + audit middleware | PENDING |
-| 6 | Telemetry / status integration (errorOccurred / notification ports + HUD wiring) | PENDING |
-
-**HookResult union expansion** (`src/hooks/hook-types.ts:39-42`): 3
-variants → 6:
-```typescript
-type HookResult =
-  | { kind: "noop" }
-  | { kind: "advise"; text: string }
-  | { kind: "block"; reason: string }
-  | { kind: "modifiedArgs"; args: unknown }       // NEW
-  | { kind: "modifiedResult"; result: unknown }   // NEW
-  | { kind: "interrupt"; reason: string };        // NEW
-```
-
-Architect verified this is a safe TypeScript-discriminated-union
-expansion (no exhaustive matching anywhere in the codebase that would
-break). `src/hooks/runtime.ts:444-449` result-handling needs to add
-the 3 new branches (currently it would silently drop them).
+Full verdict + reproduction steps at `docs/architecture/hooks-modifiedresult-verification.md`.
 
 ---
 
-## What this session did (full audit trail)
+## Phase 2 deferred-hooks scope (next session decision point)
 
-**v0.7.0 → v0.8.0 (DD9, commit `86fb9de`)**:
-- Added 15 MCP tools: 8 code-intel additions (`lsp_goto_definition`,
-  `lsp_prepare_rename`, `lsp_rename`, `lsp_code_actions`,
-  `lsp_code_action_resolve`, `deepinit_manifest`,
-  `load_omcp_skills_local`, `list_omcp_skills`); python_repl;
-  5 shared_memory_*; session_search.
-- Fixed 5 P1: loadTrace JSON.parse, loadProjectMemory JSON.parse,
-  loop-server atomic-write canonicalization, server-runtime schema
-  validation, loop-watcher execSync→spawnSync.
-- Tests: 349 → 389 (+40). 57/58 files green.
+The 3 Phase 2 hooks (`persistent-mode`, `todo-continuation`, `omc-orchestrator`) depend on **6+ omc-internal
+subsystems** that omcp does not have:
 
-**v0.8.0 → v0.9.0 (DD10, commit `67c4073`)**:
-- Added `load_omcp_skills_global` (closes omc skills tool family).
-- Fixed 2 P1: lsp_goto_definition regex escape (Critic-B finding);
-  searchSessions unreadable-file resilience.
-- Fixed 1 P1: 3rd + 4th version manifests missed in v0.8.0 bump.
-- Tests: 389 → 393 (+4). 58/59 files green.
+- `lib/worktree-paths` — needed by all 3
+- `lib/mode-state-io` — needed by persistent-mode
+- `hooks/ralph/*` — 15+ exported functions (persistent-mode imports the entire ralph state API)
+- `hooks/ultrawork/*` — needed by persistent-mode
+- `hooks/autopilot/*` — needed by persistent-mode
+- `hooks/team-pipeline/*` — needed by persistent-mode
+- `hooks/subagent-tracker/*` — needed by persistent-mode + Phase 3
+- `features/boulder-state/*` — needed by omc-orchestrator
+- `notepad in-process state` — needed by omc-orchestrator (omcp has notepad MCP tools but no in-process module)
 
-**v0.9.0 → v0.9.1 (P0 hook event names, commit `6934357`)**:
-- `OMCP_HOOK_EVENTS` corrected: `PreSubmit`→`UserPromptSubmit`,
-  `PreEnd`→`SessionEnd`, `PostSubmit` dropped (no Copilot equivalent).
-- `HookEvent` union expanded from 6 (3 invalid) to 13 valid Copilot
-  events.
-- `COPILOT_VALID_EVENTS` const + 5-test regression suite.
-- `src/hooks/runtime.ts` 3 internal event lists synchronized.
-- `docs/architecture/hooks-wiring.md` inline event list corrected.
-- Tests: 393 → 398 (+5). 59/60 files green.
-- Existing installations: `mergeCopilotHooks` strips stale
-  `__omcp:true` entries on next `omcp setup` re-run — auto-migrate.
+**Three port-strategy options for next session** (full analysis in `docs/plans/phase-2-deferred-hooks.md`):
+
+**Option A:** port the missing subsystems first (worktree-paths → ralph state schema → ultrawork → …),
+then port the 3 hooks. ~2-3 sessions.
+
+**Option B:** ship thin omcp-native variants now (persistent-mode reads a minimal ralph-state.json;
+todo-continuation reads a minimal todos.jsonl; omc-orchestrator inline-enforces delegation patterns).
+~1 follow-up session. Thinner than omc but matches v3 plan "no approximation" spirit modulo missing
+subsystems.
+
+**Option C:** defer the 3 hooks entirely until omcp ↔ omc subsystem parity is built up.
+
+User should pick the direction before next session starts coding.
+
+---
+
+## What this session DID accomplish (full audit trail)
+
+### Ralplan iter-3 → iter-4 closure (consensus loop)
+
+1. Critic iter-3 review of v3 plan → **ITERATE** verdict (5 edits required: 3 Architect conditions not folded into plan text + 2 minor)
+2. Planner iter-4 applied 5 surgical edits to docs/plans/hooks-parity-v3.md
+3. Architect iter-4 review → **APPROVE** (clean) with 3 cosmetic notes
+4. Planner applied 3 cosmetic polish items (ADR Follow-ups, Pre-mortem Scenario 1, ADR Consequences)
+5. Critic iter-4 → **APPROVE**
+6. Plan iter-4 committed as `dae5016`
+
+### Phase 1 — foundation work
+
+- `OMCP_HOOK_EVENTS` expanded from 5 to all 13 valid Copilot events (`src/runtime/copilot-config.ts`)
+- `HookResult` union expanded from 3 to 6 variants (`src/hooks/hook-types.ts`)
+- `runFireCli` synthesizes Copilot stdout protocol fields (`additionalContext`, `modifiedArgs`,
+  `modifiedResult`, `interrupt`, `reason`) with last-wins semantics (`src/hooks/runtime.ts`)
+- Tests +22 cases (17 + 5)
+- Commit: `4fb8cd1`
+
+### Phase 1 — smoke verdict (HARD GATE)
+
+- Smoke harness written (`scripts/smoke/{probe-modifiedresult.mjs, probe-simple.cmd, canary-original.txt, run-modifiedresult-smoke.mjs}`)
+- 3 diagnostic re-runs (Node probe, .cmd probe, 6 event-name variants)
+- Verdict: **FAIL** (with caveat — hooks didn't fire at all in `-p` mode)
+- Doc: `docs/architecture/hooks-modifiedresult-verification.md`
+- Commit: `6a2606e`
+
+### Phase 2 — Batches A + B
+
+**Batch A — library modules** (commit `7b00ada`):
+- `src/lib/factcheck/{index,types,checks,config,sentinel}.ts` (~855 lines source + 299 tests)
+- `src/team/sentinel-gate.ts` (~191 lines + 235 tests)
+
+**Batch B — preemptive-compaction hook** (commit `b7a423b`):
+- `src/hooks/preemptive-compaction/{index,constants,types}.ts` (~390 lines + 468 tests)
+- Subscribes to PostToolUse + PreCompact dual trigger
+- State persisted under `.omcp/state/preemptive-compaction/{sessionId}.json` via `atomicWriteFileSync`
+- Session-id slug guarded by `assertSafeSlug`
+
+**Batch C — deferred** (`docs/plans/phase-2-deferred-hooks.md`):
+- persistent-mode, todo-continuation, omc-orchestrator all blocked on unported omcp subsystems
+
+### v0.10.0 release
+
+- All 4 manifests bumped to v0.10.0 (per invariant 6):
+  - `package.json`
+  - `.agents/plugins/marketplace.json`
+  - `.claude-plugin/plugin.json`
+  - `plugins/oh-my-copilot/.claude-plugin/plugin.json`
+- `CHANGELOG.md` v0.10.0 entry added (Keep-a-Changelog format)
+- Tests: 398 (session start) → 460 passing (+62 net), 2 skipped, 0 failed
 
 ---
 
 ## Critical invariants (don't violate these)
+
+(Unchanged from prior handoff — repeated here for next-agent convenience.)
 
 1. **Any new file-name sink** uses `assertSafeSlug` from `src/runtime/safe-slug.ts`.
 2. **Any state JSON write** uses `atomicWriteFileSync` (no bare `writeFileSync`).
 3. **Any new `src/cli/commands/*.ts`** is registered in `src/cli/omcp.ts` (`cli-wiring-invariants` test enforces).
 4. **Any new detached subprocess** writes a pidfile to `.omcp/state/<scope>/<name>.pid` + has a stop verb.
 5. **Commit message factual claims** are verified by `git diff` — main agent has been caught lying ≥2 times.
-6. **Version bump synchronizes 4 manifests**: `package.json`,
-   `.agents/plugins/marketplace.json`, `.claude-plugin/plugin.json`,
-   `plugins/oh-my-copilot/.claude-plugin/plugin.json`. The
-   `cli-wiring-invariants` test enforces (catches drift, learned this
-   v0.7→v0.8 cycle).
+6. **Version bump synchronizes 4 manifests**: `package.json`, `.agents/plugins/marketplace.json`,
+   `.claude-plugin/plugin.json`, `plugins/oh-my-copilot/.claude-plugin/plugin.json`.
 7. **User-supplied strings entering `new RegExp(...)`** are escaped via
-   `value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")`. Pattern used in
-   `handleLspRename` + `handleLspGotoDefinition`.
-8. **Hook event names** MUST be in `COPILOT_VALID_EVENTS` (`src/runtime/copilot-config.ts`). Claude-Code-style names
-   (`PreSubmit`/`PostSubmit`/`PreEnd`) are silently dropped by Copilot
-   CLI — see v0.9.1 P0 root cause. Regression test:
-   `src/__tests__/copilot-hook-events-validation.test.ts`.
-9. **`subagentStart` is camelCase-ONLY** — no `SubagentStart` alias
-   in Copilot's `s2t` map. Any subscriber must use camelCase. This
-   trips the same silent-drop failure mode as #8.
+   `value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")`.
+8. **Hook event names** MUST be in `COPILOT_VALID_EVENTS`. Claude-Code-style names
+   (`PreSubmit`/`PostSubmit`/`PreEnd`) are silently dropped by Copilot CLI (this is the
+   v0.9.1 P0 root cause).
+9. **`subagentStart` is camelCase-ONLY** — no `SubagentStart` alias in Copilot's `s2t` map.
 
 ---
 
 ## Critical user emphasis (carry forward)
-
-User has stated these priorities multiple times across the session —
-v3 plan and execution must serve them:
 
 - "着重要点 ralph ralplan 以及 team 这些可以长时间运行并且多角色 agent，
   用于防止 llm 自视甚高以及幻觉，还有可以 long running"
@@ -237,68 +172,62 @@ v3 plan and execution must serve them:
 - "注意把 PreToolUse 这几个 Copilot 比 Claude 有优势的地方融入 plan 中去，
   看看有没有额外更多的应用"
 
-= Long-running multi-role anti-hallucination is THE goal. Hooks
-subsystem is the load-bearing component. Exploit Copilot-only
-capabilities (modifiedArgs/modifiedResult/interrupt) for novel
-applications, not just parity.
+= Long-running multi-role anti-hallucination is THE goal. Hooks subsystem is the load-bearing component.
+The Phase 1 smoke verdict surfaced an unexpected blocker (no hooks in `-p` mode); the next session should
+either confirm interactive-mode hooks work, or design alternative anti-hallucination mechanisms that don't
+depend on `-p`-mode hook firing.
 
 ---
 
 ## What the next session should do — ordered
 
-1. **Read** this HANDOFF.md + `docs/plans/hooks-parity-v3.md` +
-   `docs/plans/hooks-parity-open-questions.md`.
+1. **Read** this HANDOFF.md + `docs/plans/hooks-parity-v3.md` (the iter-4 final plan) +
+   `docs/plans/phase-2-deferred-hooks.md` + `docs/architecture/hooks-modifiedresult-verification.md`.
 
-2. **`git status` + `git log -3`** to verify state matches this
-   handoff. **Do NOT trust the handoff blindly** — main agent has been
-   caught lying in past sessions.
+2. **`git status` + `git log -5`** to verify state matches this handoff. **Do NOT trust the handoff blindly.**
 
-3. **Commit** `docs/plans/hooks-parity-v3.md` +
-   `docs/plans/hooks-parity-open-questions.md` (if still uncommitted).
+3. **Critical empirical question:** Manually launch `copilot` in interactive TUI mode and run the smoke probe.
+   If hooks fire there but not in `-p`, that's a major scope clarification — omcp's hook subsystem is
+   interactive-only. If hooks ALSO don't fire in TUI mode, that's a deeper bug — omcp needs to either fix the
+   wiring or redesign the anti-hallucination architecture entirely.
 
-4. **Dispatch Critic iter-3** on the v3 plan. Use the Architect's
-   iter-3 APPROVE-with-3-conditions report as input (it's not saved
-   to disk — the next session may need to re-derive or accept the
-   conditions as-is). If Critic verdict is APPROVE → proceed to step 5.
-   If ITERATE → Planner iter-4 with Critic feedback.
+4. **Phase 2 Batch C decision** — pick option A (port subsystems first), B (thin omcp-native variants), or
+   C (defer entirely) from `docs/plans/phase-2-deferred-hooks.md`. The user's emphasis on anti-hallucination
+   suggests Option A or B, not C.
 
-5. **Start Phase 1** of v3 plan: `modifiedResult` smoke test. Wire a
-   probe hook that emits a known-format `{kind: "modifiedResult"}`
-   stdout for a benign tool call (e.g., Read of a tiny file), invoke
-   Copilot CLI 1.0.48 (already installed at
-   `/c/.tools/.npm-global/copilot`), check whether the model sees the
-   rewritten output or the original. Document PASS/FAIL determination
-   in `docs/architecture/hooks-modifiedresult-verification.md`. This
-   is the HARD GATE for Phases 4-5.
+5. **Phase 3 — 20 shell hooks** (subagent lifecycle + session hooks). Largely 1:1 ports from omc; some
+   (subagent-tracker) need omcp's own state schema first.
 
-6. **Phase 2 onward** depends on Phase 1 outcome.
+6. **Phase 5 — interrupt-only cost governor + loop detector + audit logger.** Does not depend on
+   `modifiedArgs`/`modifiedResult`; should ship cleanly regardless of smoke verdict.
+
+7. **Phase 6 — error-aggregator + Notification dispatch.** Wire to existing `src/hooks/background-notifications.ts`.
+
+8. **Phase 4 — hallucination shield (advise-only fallback per smoke FAIL).** Lower priority — ships only annotations,
+   no replacement.
+
+9. **Phase 7 — modifiedArgs surgeon mode.** Needs its own empirical gate (in interactive mode) before any
+   work begins.
 
 ---
 
 ## Working environment quick-ref
 
 - **Build**: `npm run build` (clean before this session; tsc only)
-- **Tests**: `npm test`. Currently 59/60 files green, 398 passing, 2
-  skipped, 0 failed. 1 pre-existing Win vitest worker-fork EPERM
-  baseline since v0.4.0 — unchanged.
-- **CHANGELOG**: append to top of `CHANGELOG.md` (Keep-a-Changelog
-  format).
-- **Commit trailers**: project uses omc-style trailers
-  (Constraint/Rejected/Confidence/Scope-risk/Directive/Not-tested). See
-  v0.8.0/v0.9.0/v0.9.1 commits for examples.
-
+- **Tests**: `npm test`. Currently 460 passing, 2 skipped, 0 failed. 1 pre-existing Win vitest worker-fork
+  EPERM baseline since v0.4.0 — unchanged.
+- **CHANGELOG**: prepend to `CHANGELOG.md` (Keep-a-Changelog format).
+- **Commit trailers**: project uses omc-style trailers (Constraint/Rejected/Confidence/Scope-risk/Directive/Not-tested).
 - **omc reference**: `C:\Users\runjiashi\.claude\plugins\cache\omc\oh-my-claudecode\4.9.3\` (read-only)
 - **omx reference**: `C:\Users\runjiashi\_refs\oh-my-codex\` (read-only)
-- **Copilot CLI binary**: `/c/.tools/.npm-global/copilot` (v1.0.48)
+- **Copilot CLI binary**: `/c/.tools/.npm-global/copilot.cmd` (v1.0.48)
 - **Copilot CLI bundle (for grep)**: `/c/.tools/.npm-global/node_modules/@github/copilot/app.js`
+- **GH auth**: user provided `<REDACTED-TOKEN>` mid-session (OAuth token).
+  Do NOT commit it. For follow-up smoke tests use `export GH_TOKEN="..." && export COPILOT_GITHUB_TOKEN="$GH_TOKEN"`.
 
 ---
 
 ## Open omx work (NOT scope of this session's `/goal`)
 
-User's session `/goal` was "omcp 复刻 omc" — explicitly omc, not omx.
-omx parity still has ~22 missing skills (analyze, code-review,
-security-review, tdd, deepsearch, design, frontend-ui-ux, git-master,
-pipeline, swarm, web-clone, etc.) and 5 missing CLI verbs (sidecar,
-agents, deepinit, performance-goal, autoresearch-goal). Future work
-when user reprioritizes.
+User's session `/goal` was "omcp 复刻 omc" — explicitly omc, not omx. omx parity still has many missing
+skills and CLI verbs. Future work when user reprioritizes.

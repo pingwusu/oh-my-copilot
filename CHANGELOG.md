@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-05-22
+
+### Added — Phase 1 foundation + Phase 2 batches A/B from hooks-parity v3 plan
+
+After three iterations of ralplan consensus (Planner → Architect → Critic),
+the v3 plan reached APPROVE/APPROVE/APPROVE. This release executes Phase 1
+and the cleanly-portable parts of Phase 2.
+
+**Phase 1 — type system + runtime plumbing:**
+
+- `OMCP_HOOK_EVENTS` expanded from 5 to all 13 valid Copilot CLI events:
+  `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`,
+  `PostToolUse`, `PostToolUseFailure`, `ErrorOccurred`, `Stop`,
+  `SubagentStop`, `subagentStart` (camelCase-only), `PreCompact`,
+  `PermissionRequest`, `Notification`.
+- `HookResult` union expanded from 3 variants (`noop` | `advise` | `block`)
+  to 6 — added `modifiedArgs`, `modifiedResult`, `interrupt`. Each new
+  variant carries scope-gate metadata in its JSDoc (Phase 4 / Phase 7 /
+  Phase 5).
+- `runFireCli` now synthesizes the Copilot stdout protocol fields
+  (`additionalContext`, `modifiedArgs`, `modifiedResult`, `interrupt`,
+  `reason`) at the top level of the emitted JSON. `modifiedArgs` and
+  `modifiedResult` use last-wins semantics when multiple hooks fire on
+  the same event. Non-JSON output gains single-line formats for the 3
+  new kinds.
+- Tests: `src/__tests__/hook-result-expansion.test.ts` (17 cases) +
+  `src/__tests__/omcp-hook-events.test.ts` (5 cases).
+
+**Phase 2 Batch A — library modules:**
+
+- `src/lib/factcheck/` (~855 lines across 5 files) — port of omc's
+  factcheck library: claims validation engine with PASS/WARN/FAIL
+  verdicts in strict/declared/manual/quick modes. Pure logic, no
+  environment dependencies.
+- `src/team/sentinel-gate.ts` (~191 lines) — readiness gate that
+  consumes factcheck for team-worker launch validation. Fail-closed
+  when enabled but unfed. Includes `waitForSentinelReadiness` polling
+  helper with timeout.
+- Tests: factcheck.test.ts (PASS/WARN/FAIL paths + sanitization) +
+  sentinel-gate.test.ts (ready/blocked/dedup/timeout). +25 cases.
+
+**Phase 2 Batch B — preemptive-compaction hook:**
+
+- `src/hooks/preemptive-compaction/` (~390 lines) — port of omc's
+  preemptive-compaction. Subscribes to `PostToolUse` + `PreCompact` (dual
+  trigger). Returns `advise` warnings before context overflow, `noop`
+  under threshold. State persisted under `.omcp/state/preemptive-compaction/{sessionId}.json`
+  via `atomicWriteFileSync`; session-id slug guarded by `assertSafeSlug`.
+- Cooldown + MAX_WARNINGS enforced.
+- Tests: +20 cases (threshold transitions, cooldown enforcement,
+  per-session state isolation).
+
+**Phase 1 smoke verdict — modifiedResult HARD GATE:**
+
+- `scripts/smoke/` — empirical harness (probe + canary + idempotent
+  backup-restore wrapper) for verifying `modifiedResult` replacement
+  semantics against Copilot CLI 1.0.48.
+- `docs/architecture/hooks-modifiedresult-verification.md` — verdict
+  report. **Result: FAIL** in `copilot -p` non-interactive mode.
+  Critical caveat: the probe hook never fired at all (across 6 event-name
+  variants × 2 probe shapes). So the verdict is technically "hooks did
+  not fire in `-p` mode" rather than "`modifiedResult` was ignored."
+  Per Architect iter-3 condition 1: **Phase 4 hallucination-shield
+  ships as advise-only fallback** in any release that builds on this.
+
+**Documentation:**
+
+- `docs/plans/hooks-parity-v3.md` — final v3 plan with all Architect /
+  Critic iter-4 edits folded in (5 surgical + 3 cosmetic). Plan reached
+  APPROVE/APPROVE/APPROVE consensus before any code landed.
+- `docs/plans/phase-2-deferred-hooks.md` — honest scope doc cataloging
+  the 3 omc hooks (persistent-mode, todo-continuation, omc-orchestrator)
+  that depend on omcp subsystems that don't exist yet (worktree-paths,
+  ralph state schema, ultrawork, autopilot, team-pipeline, subagent-tracker,
+  boulder-state, notepad in-process state). Three port-strategy options
+  documented for the next session.
+
+### Notes
+
+- Test suite: 398 → 460 passing (+62 net), 2 skipped, 0 failed. 1
+  unhandled vitest worker EPERM is the pre-existing Windows baseline,
+  unchanged.
+- No version bump migration required for the `OMCP_HOOK_EVENTS`
+  expansion — `mergeCopilotHooks` strips stale `__omcp:true` entries
+  on the next `omcp setup`, so users get the additional 8 event
+  subscriptions automatically.
+- The `HookResult` union expansion is a TypeScript-discriminated-union
+  expansion — backwards-compatible for any consumer that exhaustively
+  switches on `kind === advise/block/noop`. Code paths that handle the
+  new kinds need to be added explicitly; runtime.ts is updated.
+
 ## [0.9.1] — 2026-05-22
 
 ### Fixed — CRITICAL P0: hook event names were Claude-Code, not Copilot
