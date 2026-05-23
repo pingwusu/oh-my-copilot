@@ -1,8 +1,66 @@
 # omcp 续接 handoff (post-v0.12.0)
 
-**Updated**: 2026-05-23 late-morning (post Branch B Phase-2-Batch-C-CLI-verbs release)
+**Updated**: 2026-05-23 mid-day (retraction of v0.12.0 "upstream Copilot bug" framing)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: `a5af910` v0.12.0 release
+**Latest commit**: `676a976` v0.12.0 CHANGELOG count fix (work continues post-release)
+
+---
+
+## 2026-05-23 mid-day — Retraction: the probe verdict was a wrong-cause attribution
+
+**The "Copilot CLI 1.0.52-4 still has the upstream `SyntaxError: Unexpected token ':'` hook
+executor bug" claim from the v0.12.0 session section below is INCORRECT.** Subsequent user
+investigation produced a definitive root-cause trace that supersedes that framing:
+
+### Actual root cause (user-supplied trace, locally reproduced)
+
+1. Copilot CLI 1.0.52-4 on Windows dispatches hooks via `pwsh.exe -nop -nol -c <hook command>`
+   and pipes the hook event JSON to that process's stdin. **This is the correct, normal design.**
+2. The OMC plugin's hook command at `omc/hooks/hooks.json:8` is **Bash-style**:
+   ```
+   node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/keyword-detector.mjs
+   ```
+3. In PowerShell 7, `"$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs` does NOT concatenate the
+   variable with the path suffix the way Bash does. When the variable is undefined the
+   argv passed to `node.exe` becomes
+   `["node.exe", "", "/scripts/run.cjs", "", "/scripts/keyword-detector.mjs"]` — empty
+   string between every undefined `$CLAUDE_PLUGIN_ROOT` and the path suffix.
+4. When Node receives an empty string as its first positional script path, it falls back
+   to executing source from stdin. Copilot's hook event JSON arriving on stdin is then
+   parsed as JavaScript, producing the documented `SyntaxError: Unexpected token ':'` at
+   `{"hook_event_name":...}`'s first colon.
+5. Replacing the command with the PowerShell-correct form (using `$env:CLAUDE_PLUGIN_ROOT`
+   inside a single double-quoted string, or with absolute paths) makes Node receive the
+   hook JSON as `argv[1]` (the proper script-path slot becomes a real file), and the
+   probe's expected `{"continue":true,"suppressOutput":true}` flows back. **The probe was
+   identified-by-user as reproducible both ways.**
+
+### What this means for v0.12.0
+
+| Claim in v0.12.0 docs | Corrected understanding |
+|---|---|
+| "Upstream Copilot bug — unchanged in 1.0.52-4" | OMC/omcp hook command template bug — cross-platform fix is OUR responsibility |
+| "Phase 2 Batch C N+2 remains BLOCKED-UPSTREAM" | N+2 is blocked on omc/omcp shipping a Windows/PowerShell-safe hook command template — NOT on a Copilot upstream fix |
+| "Re-test trigger: user upgrades Copilot CLI past 1.0.52-4" | Re-test trigger: omc/omcp ships absolute-path or PowerShell-form hook commands |
+
+### What v0.12.0 still got right
+
+- Branch B (4 `omcp state` sub-actions on top of N+1 lib subsystems) is independent
+  of the hook firing path. The CLI verbs work without hooks. **The v0.12.0 commits remain
+  valid as shipped.**
+- The probe procedure itself (wire / exercise / check / unwire) is correct and useful;
+  it would have caught a corrected hook command working if the corrected command had
+  been wired during the probe pass.
+
+### Implications for next session
+
+- **Hook command template fix** is now actionable in omc and/or omcp without waiting
+  for Copilot.
+- N+2 hook ports (`persistent-mode`, `todo-continuation`, `omc-orchestrator`) are
+  unblocked **once the hook command template fix lands**.
+- The user's broader directive (2026-05-23 mid-day) is to **make omcp the orchestrator**
+  with ralph/ralplan/team as core long-running features, verified via team+critic in
+  independent context, looping until implemented.
 
 ---
 

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Correction — Retraction of v0.12.0 "upstream Copilot bug" framing (2026-05-23 mid-day)
+
+The v0.12.0 section below attributed the `SyntaxError: Unexpected token ':'`
+crash to Copilot CLI 1.0.52-4's hook transport. Subsequent user investigation
+produced a definitive trace proving the bug is in **OMC's hook command
+template** (Bash-style `"$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs ...` does not
+concatenate variable + path suffix under PowerShell 7), not in Copilot's
+hook transport. See `HANDOFF.md` section "2026-05-23 mid-day — Retraction"
+for the full corrected causal chain.
+
+**Effect on v0.12.0**: the four `omcp state` sub-actions and the
+`escapeRegExp` utility shipped in v0.12.0 are independent of hooks and
+remain correct as released. The "BLOCKED-UPSTREAM" status of Phase 2
+Batch C N+2 (the three deferred hook ports) is incorrect — the blocker
+is on us shipping a Windows/PowerShell-safe hook command template, not
+on a Copilot upstream fix.
+
 ## [0.12.0] — 2026-05-23
 
 ### Added — Branch B of next-session-ralplan: state CLI verbs on top of N+1 lib subsystems
