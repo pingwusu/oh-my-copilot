@@ -1,8 +1,115 @@
-# omcp 续接 handoff (post-v0.11.0)
+# omcp 续接 handoff (post-v0.12.0)
 
-**Updated**: 2026-05-22 late-afternoon (post Phase 5 + Phase 6 milestone)
+**Updated**: 2026-05-23 late-morning (post Branch B Phase-2-Batch-C-CLI-verbs release)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: `7ba6efe` v0.11.0 release
+**Latest commit**: `a5af910` v0.12.0 release
+
+---
+
+## 2026-05-23 v0.12.0 session — Branch B of next-session-ralplan landed
+
+This session ran the **consensus-approved plan at `docs/plans/next-session-ralplan.md`**
+end-to-end via `/oh-my-claudecode:ralph 串行`. The plan was a probe-then-fork
+decision tree: Step 1a `copilot --version` ⇒ if 1.0.51 skip probe, else run
+probe. Copilot CLI is now **1.0.52-4**, so the probe ran.
+
+**Probe re-verdict on Copilot CLI 1.0.52-4: NO_FIRE (same upstream bug).**
+
+The probe wired postToolUse/PostToolUse/preToolUse/PreToolUse hooks into
+`~/.copilot/settings.json` and exercised the binary via `copilot -p` with
+`--allow-all-tools` against a Read of `package.json`. The probe log
+(`~/.copilot/omcp-debug-probe.log`) was never written. Inspection of the
+session's Copilot process log
+(`~/.copilot/logs/process-1779503460304-29240.log`) shows the same crash
+documented for 1.0.51:
+
+```
+[ERROR] Hook execution failed: HookExitCodeError: Hook command failed with code 1
+{"hook_event_name":"UserPromptSubmit", …}
+SyntaxError: Unexpected token ':'
+    at makeContextifyScript / compileScript / evalTypeScript / eval_stdin
+```
+
+Confirmed-affected events: `UserPromptSubmit`, `SessionStart`, `PostToolUse`.
+The upstream `node --input-type=ts -` JSON-as-TS bug is unchanged in 1.0.52-4.
+The probe was unwired cleanly afterward (no stale hook entries left in
+`~/.copilot/settings.json`).
+
+**Decision:** Branch B (CLI verbs) was executed. Phase 2 Batch C N+2 (the 3
+deferred hook ports) **remains BLOCKED-UPSTREAM**. **Re-test trigger:** user
+upgrades Copilot CLI past 1.0.52-4.
+
+### v0.12.0 deliverables (this session, 9 commits past `e014e35`)
+
+| Story | Status | Commit |
+|---|---|---|
+| US-001 probe gate | NO_FIRE verdict recorded in `.omc/progress.txt` | (no commit — diagnostic only) |
+| US-B0 `escapeRegExp` runtime util + 5 tests | ✓ | `cfb8d96` |
+| US-B1 `omcp state ralph` action + 11 tests | ✓ | `90d2f52` |
+| US-B2 `omcp state ultrawork` action + 7 tests | ✓ | `f28be2a` |
+| US-B3 `omcp state todo` action + 12 tests (incl. regex-escape proof) | ✓ | `7dd7f03` |
+| US-B4 `omcp state boulder` action + 8 tests | ✓ | `e9e8169` |
+| Test stability — EPERM-tolerant teardown in `doctor-team-routing.test.ts` | ✓ | `68fb5ea` |
+| US-B5 v0.12.0 release — 4 manifests + CHANGELOG | ✓ | `a5af910` |
+| US-B6 this HANDOFF refresh | ✓ | (this commit) |
+
+Tests: **699 → 742 passing** (+43 net), 0 failed, 2 skipped, 1 pre-existing
+Windows worker-fork EPERM at the file level (hardened against cascading into
+test-level failures in `68fb5ea`).
+
+### What the four new state sub-actions look like
+
+All nested under the existing `omcp state` Commander command (NOT new
+top-level verbs — `omcp ralph` and `omcp ultrawork` are already mode
+launchers via `MODE_COMMANDS` at `src/cli/omcp.ts:64-85`). Each sub-action
+delegates to the corresponding N+1 lib module for read/write semantics:
+
+```
+omcp state ralph     status | start <task> | iterate | clear
+omcp state ultrawork status | start <prompt> | clear
+omcp state todo      add <title> | update <id> <status> |
+                     list [--filter <pattern>] | clear
+omcp state boulder   status | list-plans | clear
+```
+
+The `--filter` flag on `omcp state todo list` passes through
+`src/runtime/escape-regexp.ts` (US-B0) before `new RegExp(...)`, so a `.`
+in the filter matches a literal dot — verified by test
+`list --filter treats the pattern literally`.
+
+### Updated "what the next session should do"
+
+The section below this one (originally written 2026-05-22) talks about
+the Option A N+1/N+2 split. **N+1 is complete (last session) and N+2 is
+still blocked.** The next-session priorities are now:
+
+1. **Re-read `docs/plans/next-session-ralplan.md`** — that's the
+   consensus-approved plan that drove this session's Branch B work.
+   Any further evolution should run through a new ralplan iteration.
+2. **`git status` + `git log -15`** to verify state — `e014e35` was the
+   start-of-session HEAD, `a5af910` is the end-of-session HEAD (or `HEAD~`
+   if this HANDOFF refresh shipped after).
+3. **Re-probe** when Copilot CLI ships 1.0.53+ — the same
+   `scripts/smoke/wire-probe-for-tui.mjs wire / -p exercise / check / unwire`
+   flow works non-interactively (see this session's process log entries
+   above for the `copilot -p` invocation that exercised it).
+4. **If probe returns FIRE**, re-execute Branch A of the same plan: port
+   `persistent-mode`, `todo-continuation`, `omc-orchestrator` from omc.
+   The N+1 lib subsystems they depend on are all in place.
+5. **Optional follow-ups carried over from Critic iter-1 minor findings:**
+   - Update `src/__tests__/cli-wiring-invariants.test.ts:155` to check
+     all 4 manifests (currently checks 3).
+   - Retrofit `src/cli/commands/session.ts:32` with `escapeRegExp` —
+     the pre-existing unescaped `new RegExp(query)`.
+   - Consider proper Commander subcommand nesting for `omcp state`
+     (current implementation is a switch on a positional `<action>`).
+6. **Phase 4 re-evaluation** — the original Phase 1 verdict that drove the
+   "advise-only" downgrade has been superseded twice now (this session +
+   the 2026-05-23 morning re-verdict). The downgrade still stands because
+   it depends on hook firing, but a future Phase 4 sprint should redesign
+   around modifiedResult-bearing hooks only once the upstream bug clears.
+
+---
 
 ---
 
