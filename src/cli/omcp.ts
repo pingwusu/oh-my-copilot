@@ -64,6 +64,7 @@ import { runProjectMemoryCommand } from "./commands/project-memory.js";
 import { ultragoalCommand } from "./commands/ultragoal.js";
 import { runCodeIntelCommand } from "./commands/code-intel.js";
 import { runWikiCommand } from "./commands/wiki.js";
+import { runVerifyPhase } from "./commands/verify-phase.js";
 
 const MODE_COMMANDS = [
   "ralph",
@@ -651,6 +652,22 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         console.error(err);
         process.exitCode = 1;
       });
+    });
+
+  program
+    .command("verify-phase <phase-id>")
+    .description(
+      "Run the team+critic verification protocol for a phase (reads .omcp/state/verification/<phase-id>-submission.md)",
+    )
+    .option(
+      "--max-iterations <n>",
+      "maximum review–revise cycles before escalation (default 5)",
+      (v) => Number(v),
+      5,
+    )
+    .action((phaseId: string, opts: { maxIterations?: number }) => {
+      const r = runVerifyPhase({ phaseId, maxIterations: opts.maxIterations });
+      process.exitCode = r.exitCode;
     });
 
   program

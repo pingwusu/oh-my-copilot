@@ -442,6 +442,41 @@ export function detectArchitectApproval(text: string): boolean {
 }
 
 /**
+ * Parse a structured verdict keyword from free-form reviewer output.
+ *
+ * Strictness rule: the verdict keyword (APPROVE / ITERATE / REJECT) must be
+ * the sole significant token on a line. Leading/trailing whitespace and
+ * optional markdown bold markers (`**APPROVE**`) are tolerated. Inline
+ * occurrences such as "I would APPROVE this if X" or "REJECT the alternative"
+ * do NOT match. Case-insensitive. If a single line contains more than one
+ * verdict keyword the result is ambiguous → returns null.
+ *
+ * Returns null when no unambiguous verdict keyword line is found.
+ */
+export function detectVerdict(
+  text: string,
+): "APPROVE" | "ITERATE" | "REJECT" | null {
+  const KEYWORDS = ["APPROVE", "ITERATE", "REJECT"] as const;
+  // Strip optional markdown bold wrapper, then check that nothing else remains
+  // on the line beyond whitespace.
+  const LINE_RE = /^\s*(?:\*\*)?\s*(APPROVE|ITERATE|REJECT)\s*(?:\*\*)?\s*$/i;
+
+  for (const raw of text.split("\n")) {
+    const m = LINE_RE.exec(raw);
+    if (!m) continue;
+    // Verify the line does not contain a second verdict keyword after stripping
+    // the matched one (ambiguous line guard).
+    const stripped = raw.replace(new RegExp(m[1], "gi"), "").replace(/\*+/g, "");
+    const hasSecond = KEYWORDS.some(
+      (kw) => kw !== m[1].toUpperCase() && new RegExp(`\\b${kw}\\b`, "i").test(stripped),
+    );
+    if (hasSecond) return null;
+    return m[1].toUpperCase() as "APPROVE" | "ITERATE" | "REJECT";
+  }
+  return null;
+}
+
+/**
  * Detect a reviewer-rejection signal and surface a short feedback excerpt.
  *
  * Heuristic, not exhaustive: matches common phrasings ("architect rejected",

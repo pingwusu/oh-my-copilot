@@ -52,8 +52,8 @@ The architect's output must include:
 - For APPROVE: a one-paragraph rationale confirming the key design properties hold.
 
 **Fresh-context requirement:** the architect must not be the same agent instance that executed the
-phase. Spawn a new `copilot -p` session or equivalent isolated context. The `omcp verify <phase-id>`
-CLI verb (see placeholder below) automates this spawn.
+phase. Spawn a new `copilot -p` session or equivalent isolated context. The `omcp verify-phase <phase-id>`
+CLI verb (see usage section below) automates this spawn.
 
 ---
 
@@ -119,7 +119,7 @@ On escalation the executor writes a `.omcp/state/verification/<phase-id>-escalat
 containing: the iteration count, the last pair of verdicts, and the unresolved objection list.
 The user decides whether to descope, accept partial completion, or restart the phase.
 
-**Exit codes for `omcp verify <phase-id>` (future CLI verb — see placeholder below):**
+**Exit codes for `omcp verify-phase <phase-id>`:**
 
 | Code | Meaning |
 |------|---------|
@@ -195,24 +195,38 @@ expected happy path for tasks with an initially incomplete evidence map.
 
 ---
 
-## Future CLI Verb Placeholder: `omcp verify <phase-id>`
+## CLI Verb: `omcp verify-phase <phase-id>`
 
-The `omcp verify <phase-id>` command is the automated form of this protocol. It is planned for
-Phase 4 of orchestrator-v1 (`critic-verify-loop` skill) and is **not yet implemented**.
+The `omcp verify-phase <phase-id>` command is the automated form of this protocol, implemented in
+`src/cli/commands/verify-phase.ts` and registered in `src/cli/omcp.ts` per invariant 8.
 
-When implemented, it will:
+(This verb was originally planned as `omcp verify <phase-id>` but was renamed to `verify-phase` to
+avoid collision with the existing `omcp verify` mode-launcher entry in `MODE_COMMANDS`.)
 
-1. Read the submission from `.omcp/state/verification/<phase-id>-submission.md`.
-2. Spawn a fresh `copilot -p` session with the architect review prompt.
-3. Parse the architect's verdict using `detectArchitectApproval` / `detectArchitectRejection`
-   from `src/lib/ralph-state.ts`.
-4. Spawn a second fresh session for the critic cross-check.
-5. Apply the Step 4 pass condition and loop per Step 5.
-6. Write the result to `.omcp/state/verification/<phase-id>-<run-id>.json`.
-7. Exit with code 0 (pass), 1 (reject after 5 iterations), or 2 (invocation error).
+**Usage:**
 
-The verb will be registered in `src/cli/omcp.ts` per invariant 8 (CLI registration), dispatching
-to `src/cli/commands/critic-verify-loop.ts`.
+```
+omcp verify-phase <phase-id> [--max-iterations <n>]
+```
 
-Until this verb exists, the protocol is run manually by the team lead posting the submission to
-fresh agent contexts and collecting verdicts by message.
+Options:
+- `--max-iterations <n>` — maximum review–revise cycles before escalation (default 5).
+
+The command:
+
+1. Reads the submission from `.omcp/state/verification/<phase-id>-submission.md`.
+2. Spawns a fresh `copilot -p` session with the architect review prompt.
+3. Parses the architect's verdict using `detectVerdict()` from `src/lib/ralph-state.ts`,
+   which recognises APPROVE / ITERATE / REJECT keywords on their own line.
+4. Spawns a second fresh session (independent context) for the critic cross-check.
+5. Applies the Step 4 pass condition and loops per Step 5 (up to `--max-iterations`).
+6. Writes the result to `.omcp/state/verification/<phase-id>-<run-id>.json` via
+   `atomicWriteFileSync` (path validated via `assertSafeSlug`, per invariants 1 and 2).
+7. Exits with code 0 (pass), 1 (escalation after max iterations or REJECT), or 2 (invocation error).
+
+**Example:**
+
+```sh
+# Write a submission, then run the automated protocol:
+omcp verify-phase phase-c --max-iterations 3
+```
