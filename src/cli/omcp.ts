@@ -3,7 +3,7 @@
 
 import { Command } from "commander";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runFireCli } from "../hooks/runtime.js";
@@ -666,14 +666,25 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   await program.parseAsync(argv);
 }
 
-function isDirectInvocation(): boolean {
-  const entry = process.argv[1];
-  if (!entry) return false;
-  const here = fileURLToPath(import.meta.url);
-  return resolve(entry) === resolve(here);
+// Normalizes a filesystem path through realpathSync so that npm-link / npm-install-g
+// symlinks resolve to the same canonical location as Node's ESM loader resolves
+// `import.meta.url` to (which always realpath's by default). Falls back to
+// `resolve` if realpathSync throws — covers the rare case where one of the paths
+// doesn't actually exist on disk yet (e.g. a stale argv[1] under a renamed bin).
+function canonicalize(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
 }
 
-if (isDirectInvocation()) {
+export function isDirectInvocation(entry: string | undefined, here: string): boolean {
+  if (!entry) return false;
+  return canonicalize(entry) === canonicalize(here);
+}
+
+if (isDirectInvocation(process.argv[1], fileURLToPath(import.meta.url))) {
   runCli().catch((err) => {
     console.error(err);
     process.exit(1);
