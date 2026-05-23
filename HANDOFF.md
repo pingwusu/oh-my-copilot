@@ -1,6 +1,6 @@
 # omcp 续接 handoff (post-v0.13.0 Phase 3)
 
-**Updated**: 2026-05-23 evening (Phase 3 complete — T1 ralph state-machine, T2 ralplan-boulder, T3 team-shard-merge, T4 invariants.md)
+**Updated**: 2026-05-23 evening (Phase 3 complete — T1 ralph state-machine, T2 ralplan-boulder, T3 team-shard-merge, T4 invariants.md; Phase 5 verification protocol doc added)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
 **Latest commit**: `9c6fccb` docs(handoff): Phase 3 closure + Phase 4 critic-verify-loop priorities
 
@@ -22,6 +22,17 @@ Phase 3 shipped as patch work behind v0.13.0 (no version bump — all CLI surfac
 **Tests: 742 (v0.13.0 baseline) → 889 passing** (+147 net), 2 skipped, 0 failed.
 1 pre-existing Windows vitest worker-fork crash at file level (unchanged since v0.4.0).
 tsc --noEmit: clean.
+
+### Phase 5 — Verification protocol (recurring)
+
+The 5-step team+critic verification protocol is codified at:
+
+- **`docs/workflows/team-critic-verification.md`** — protocol steps, pass condition, iterate/reject loop, Phase 1.5 A/B/C closure examples, and `omcp verify <phase-id>` CLI verb placeholder.
+- Test: `src/__tests__/team-critic-verification-doc.test.ts` (13 tests — doc exists + 5 heading checks + content checks).
+
+The protocol runs after every phase: executor diff → fresh architect → fresh critic → both APPROVE = pass; ITERATE loops up to 5; REJECT after 5 = escalate.
+
+---
 
 ### Phase 4 — next session priorities
 
