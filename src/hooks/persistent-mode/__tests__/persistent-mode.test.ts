@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createPersistentModeHook } from "../index.js";
+import { readRalphState } from "../../../lib/ralph-state.js";
 import type { HookContext } from "../../hook-types.js";
 import type { RalphState } from "../../../lib/ralph-state.js";
 import type { UltraworkState } from "../../../lib/ultrawork-state.js";
@@ -409,5 +410,35 @@ describe("architect approval detection", () => {
       expect(result.text).toContain("ralph-continuation");
       expect(result.text).not.toContain("RALPH LOOP COMPLETE — VERIFIED");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// incrementRalphIteration on Stop (Phase 4.T2)
+// ---------------------------------------------------------------------------
+
+describe("iteration counter increments on Stop", () => {
+  it("bumps iteration from 1 to 2 on first Stop fire", async () => {
+    writeState(tmpDir, "ralph", makeRalph({ iteration: 1 }));
+    await hook.run(makeCtx(tmpDir));
+    const state = readRalphState(tmpDir);
+    expect(state?.iteration).toBe(2);
+  });
+
+  it("bumps iteration across 3 consecutive Stop fires (1→2→3→4)", async () => {
+    writeState(tmpDir, "ralph", makeRalph({ iteration: 1 }));
+    await hook.run(makeCtx(tmpDir));
+    await hook.run(makeCtx(tmpDir));
+    await hook.run(makeCtx(tmpDir));
+    const state = readRalphState(tmpDir);
+    expect(state?.iteration).toBe(4);
+  });
+
+  it("does not increment when ralph state is inactive", async () => {
+    writeState(tmpDir, "ralph", makeRalph({ active: false, iteration: 5 }));
+    await hook.run(makeCtx(tmpDir));
+    const state = readRalphState(tmpDir);
+    // State is untouched — still iteration 5
+    expect(state?.iteration).toBe(5);
   });
 });
