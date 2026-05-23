@@ -1,8 +1,9 @@
 // `omcp session [query]` — list omcp session dirs under .omcp/state/sessions/
-// with optional grep-style filter on contained logs/state.
+// with optional literal-substring filter on contained logs/state.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { escapeRegExp } from "../../runtime/escape-regexp.js";
 
 export interface SessionEntry {
   id: string;
@@ -29,7 +30,7 @@ export function listSessions(query?: string): SessionEntry[] {
       for (const f of workerLogs) {
         try {
           const text = readFileSync(f, "utf8");
-          matches += (text.match(new RegExp(query, "gi")) ?? []).length;
+          matches += (text.match(new RegExp(escapeRegExp(query), "gi")) ?? []).length;
         } catch {
           // ignore unreadable file
         }

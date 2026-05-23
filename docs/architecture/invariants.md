@@ -145,17 +145,20 @@ string contains regex metacharacters.
 - `src/cli/commands/state-todo.ts:106` — `new RegExp(escapeRegExp(flags.pattern))`
 - `src/lib/factcheck/config.ts:154` — `new RegExp("^" + escaped + "$")` where
   `escaped` is pre-processed
+- `src/cli/commands/session.ts:32` — `new RegExp(escapeRegExp(query), "gi")`
+  on the user-supplied CLI query argument (retrofit landed in v1.0.0 prep)
 
 **Known exceptions (trusted inputs — not carve-outs):**
 - `src/mcp/code-intel-server.ts:567-579,616,667` — patterns are constructed
-  from developer-controlled symbol name strings (not user input) and are
-  hardened with inline escaping where needed (`replace(/[.*+?^${}()|[\]\\]/g, "\\$&")`)
-- `src/cli/commands/session.ts:32` — `query` is a CLI argument treated as a
-  raw regex by design (documented behavior; callers who want literal matching
-  must escape themselves)
+  from MCP tool input (`args.symbol`, `args.oldName`) and are hardened with
+  inline escaping at `code-intel-server.ts:589`
+  (`replace(/[.*+?^${}()|[\]\\]/g, "\\$&")`). The escaping IS the
+  user-input safety boundary — moving to a centralized `escapeRegExp`
+  helper here would be a refactor, not a security fix.
 
-**Carve-outs:** None for user-facing search patterns; see exceptions above for
-developer-controlled symbol lookups.
+**Carve-outs:** None for user-facing search patterns. All known
+user-input regex construction sites either pass through `escapeRegExp` or
+have inline escaping equivalent to it.
 
 ---
 
