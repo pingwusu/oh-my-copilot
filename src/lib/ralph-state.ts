@@ -241,6 +241,26 @@ export function readPrd(worktreeRoot?: string): PRD | null {
   }
 }
 
+/**
+ * Write a PRD to the path referenced by ralph state (or the default
+ * `.omcp/prd.json`). Creates the directory if needed. Returns true on success.
+ */
+export function writePrd(prd: PRD, worktreeRoot?: string): boolean {
+  const state = readRalphState(worktreeRoot);
+  const target = state?.prdPath
+    ? resolvePrdPath(state.prdPath, worktreeRoot)
+    : defaultPrdPath(worktreeRoot);
+  try {
+    ensureOmcpDir(".", worktreeRoot);
+    const dir = dirname(target);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    atomicWriteFileSync(target, JSON.stringify(prd, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Compute aggregate PRD progress + identify the next story to work on. */
 export function getPrdStatus(prd: PRD): PRDStatus {
   const stories = prd.userStories;

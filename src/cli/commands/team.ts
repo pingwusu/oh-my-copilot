@@ -22,6 +22,9 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
+import { mergeShards } from "../../lib/team-shard-state.js";
+import type { MergeReport } from "../../lib/team-shard-state.js";
+
 export interface TeamSpec {
   count: number;
   agent?: string;
@@ -173,6 +176,33 @@ export function stopTeam(
   }
 
   return { sessionId, killed, errors };
+}
+
+// ─── merge-shards subcommand ──────────────────────────────────────────────────
+
+export interface TeamMergeResult {
+  ok: boolean;
+  report?: MergeReport;
+  error?: string;
+}
+
+/**
+ * Merge all per-worker PRD shards for `teamName` into the canonical PRD.
+ *
+ * Called by `omcp team merge-shards <team-name>` and optionally auto-triggered
+ * by the persistent-mode hook when ralph PRD allComplete is detected.
+ */
+export function runTeamMergeShards(
+  teamName: string,
+  opts: { cwd?: string } = {},
+): TeamMergeResult {
+  const cwd = opts.cwd ?? process.cwd();
+  try {
+    const report = mergeShards(teamName, cwd);
+    return { ok: true, report };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
 }
 
 // DD8: short busy-poll for process termination. Bounded by deadlineMs.
