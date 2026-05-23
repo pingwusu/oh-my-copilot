@@ -45,6 +45,7 @@ import {
   writeState,
 } from "./commands/state.js";
 import { runStateRalph } from "./commands/state-ralph.js";
+import { runStateBoulder } from "./commands/state-boulder.js";
 import { runStateTodo } from "./commands/state-todo.js";
 import { runStateUltrawork } from "./commands/state-ultrawork.js";
 import { formatStatus, readStatus } from "./commands/status.js";
@@ -452,6 +453,10 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         }
         case "todo": {
           process.exitCode = runStateTodo(args);
+          return;
+        }
+        case "boulder": {
+          process.exitCode = runStateBoulder(args);
           return;
         }
         default:
