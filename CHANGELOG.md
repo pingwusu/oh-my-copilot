@@ -37,7 +37,7 @@ or `omcp ultrawork` verbs, which already exist as mode launchers via
 `MODE_COMMANDS` (`src/cli/omcp.ts:64-85`). The `omcp state` description
 string is updated to advertise the new sub-actions.
 
-Test count: 699 → 743 passing (+44 net), 0 failed, 2 skipped, Windows
+Test count: 699 → 742 passing (+43 net), 0 failed, 2 skipped, Windows
 worker-fork EPERM baseline unchanged (hardened in this release via
 `doctor-team-routing.test.ts` teardown try/catch matching the
 `atomic-write.test.ts` pattern).
