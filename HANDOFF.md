@@ -1,21 +1,76 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-23 late-evening (orchestrator-v1 fully shipped, code-complete; end-to-end runtime verification deferred to next session)
+**Updated**: 2026-05-24 early-morning (v1.0.0 cut — orchestrator-v1 verified end-to-end against real Copilot CLI)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: `3d2ed79`
-**Version**: v0.13.0 (released this session as Phase 2 deliverable)
-**Tests**: 916 passing, 0 failed, 2 skipped, 1 pre-existing Windows vitest worker-fork EPERM at file level (unchanged baseline since v0.4.0)
+**Latest commit**: see `git log -1` — Phase Z release commit
+**Version**: **v1.0.0** (first stable release; cut this session as Phase Z deliverable)
+**Tests**: 979 passing, 0 failed, 2 skipped, 1 pre-existing Windows vitest worker-fork EPERM at file level (unchanged baseline since v0.4.0)
 **Build**: `npm run build` clean (tsc no diagnostics)
 
 ---
 
-## TL;DR
+## TL;DR — what landed in v1.0.0
 
-orchestrator-v1 plan (5 phases) is **code-complete and committed**. The plan is at `docs/plans/orchestrator-v1-ralplan.md` (consensus-approved through 4 ralplan iterations at commit `b66792f`). All phases (1, 1.5, 2, 3, 4, 5) shipped this session.
+orchestrator-v1 is no longer just "code-complete"; it is **runtime-verified
+end-to-end** against a real Copilot CLI session. The proof artifact is at
+`docs/smoke/orchestrator-v1-real-copilot-smoke.md`.
 
-**What this means in practice:** every layer of the orchestrator is in place — state libs, CLI surface, hook ports, state-machine wiring, verification protocol. Unit + integration tests cover the logic.
+This session executed the consensus-approved Phase A → Z plan at
+`docs/plans/v1.0.0-runtime-verify-ralplan.md` (commit `695d3e3`,
+Architect+Critic both APPROVE). Phase A's smoke run surfaced two
+Windows-specific bootstrap bugs that were TDD-fixed before the loop
+could complete; Phases B/C/E1/E2 closed the deferred pre-mortems and
+small tails the orchestrator-v1 plan had carried over. Phase Z bumped
+all 4 version manifests, prepended CHANGELOG.md, and cut v1.0.0.
 
-**What is NOT yet verified:** a real Copilot TUI session has not been driven end-to-end to confirm hooks actually fire, the persistent-mode loop actually iterates, and the team-shard-merge actually reconciles concurrent worker output. The next session's primary job is exactly this **runtime smoke**.
+### Commits this session
+
+| Phase | Status | Commit | Title |
+|---|---|---|---|
+| Consensus | ✓ | `695d3e3` | docs(plan): v1.0.0 runtime-verify ralplan — consensus-approved |
+| A.0 (bootstrap bug) | ✓ | `5ab4f90` | fix(cli): isDirectInvocation tolerates npm-link symlinks |
+| A.1 (bootstrap bug) | ✓ | `7eb1f14` | fix(spawn): cross-platform copilot spawn handles Windows .cmd shims |
+| A (smoke) | ✓ | `2c50b40` | docs(smoke): orchestrator-v1 real Copilot ralph-loop PASS |
+| B (pre-mortem #1) | ✓ | `1955233` | feat(setup): emit absolute-path hook command when omcp not on PATH |
+| C (verify-phase) | ✓ | `8b7850b` | feat(cli): omcp verify-phase &lt;phase-id&gt; — automate team+critic protocol |
+| E1 (4-manifest test) | ✓ | `71f2069` | test(invariants): cli-wiring-invariants checks all 4 manifests |
+| E2 (escapeRegExp retrofit) | ✓ | `58321da` | fix(session): escapeRegExp on query input + invariants.md doc accuracy |
+| Z (release) | ✓ | (this commit) | chore(release): v1.0.0 — orchestrator-v1 verified end-to-end |
+
+### Verified at v1.0.0
+
+- `npm link` makes `omcp --version` print `1.0.0` from a fresh shell
+- `omcp setup` writes 13 hook events into `~/.copilot/settings.json` with `__omcp:true` markers
+- `omcp ralph --prd .omcp/prd.json "..."` drives a real Copilot session: PRD stories transition `passes:false → passes:true`, allComplete short-circuits the loop, ralph-state cleared on exit
+- 4 version-carrier manifests in lockstep (CI enforced via `cli-wiring-invariants.test.ts`)
+- `omcp verify-phase --help` shows the new team+critic protocol verb; legacy `omcp verify` mode-launcher still works (no collision)
+- `omcp` PATH fallback emits `node "<absolute-path>"` form when not on PATH (pre-mortem #1 closed)
+- `omcp session <query>` uses `escapeRegExp` on user input (invariant 6 compliance)
+
+### What is NOT verified at v1.0.0 — follow-ups for v1.1
+
+1. **PostToolUse hook executor noise** — Phase A smoke logged 64
+   `Hook command failed with code 1` entries from Copilot's hook
+   executor. The orchestration loop completed in spite of them
+   (PRD lifecycle, allComplete, exit 0 all worked), but the
+   underlying hook-fire path needs RCA. Flagged in the smoke
+   artifact's Follow-ups section.
+2. **Real team-shard merge smoke** — orchestrator-v1 plan Phase 3.T3
+   shipped the merge code + 10 unit tests, but a live `omcp team`
+   smoke against concurrent workers writing shard state has not
+   been driven. Should be on v1.1 path.
+3. **Daemon mode (Option O-B of orchestrator-v1)** — explicitly
+   deferred to v1.1+; only build if users demand it.
+4. **modifiedArgs surgeon mode (Phase 7)** — was gated on TUI smoke
+   PASS — now we have that gate; can be picked up in v1.1.
+5. **OMC upstream `$CLAUDE_PLUGIN_ROOT` patch** — separate repo,
+   separate session.
+6. **`omcp verify-phase` real end-to-end test** — Phase C tests use
+   DI mock spawn; a live exercise against actual architect/critic
+   sub-Copilot processes is a v1.1 hardening.
+7. **`npm pack && npm install -g <.tgz>` CI gate** — closes the
+   npm-link-vs-real-install fidelity gap flagged by Architect
+   iter-2 of the v1.0.0 ralplan.
 
 ---
 
