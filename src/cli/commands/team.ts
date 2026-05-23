@@ -10,7 +10,8 @@
 // Per-worker pidfiles are written to .omcp/state/team/<sessionId>/worker-K.pid
 // so that stopTeam can SIGTERM them on Ctrl+C.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { spawnCrossPlatform } from "../../runtime/resolve-executable.js";
 import {
   existsSync,
   mkdirSync,
@@ -92,7 +93,10 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
   for (let i = 0; i < spec.count; i++) {
     const args = ["-p", `${task} (worker ${i + 1}/${spec.count})`, "--allow-all-tools"];
     if (spec.agent) args.push("--agent", spec.agent);
-    const child = spawn("copilot", args, { detached: true, stdio: "ignore" });
+    const child = spawnCrossPlatform("copilot", args, {
+      detached: true,
+      stdio: "ignore",
+    });
     child.unref();
     if (child.pid !== undefined) {
       // Record the worker pid so stopTeam can SIGTERM it later.

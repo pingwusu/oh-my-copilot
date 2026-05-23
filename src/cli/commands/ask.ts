@@ -2,12 +2,12 @@
 // `family` is claude | gpt | auto; resolved into a concrete model id (per-agent
 // override when --agent is supplied) and passed to copilot via --model.
 
-import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
   loadAgentCatalog,
   resolveAgentModel,
 } from "../../runtime/agent-models.js";
+import { spawnSyncCrossPlatform } from "../../runtime/resolve-executable.js";
 import {
   type DualModel,
   type ModelFamily,
@@ -62,6 +62,9 @@ export function runAsk(opts: AskOptions): number {
   if (opts.allowAllTools !== false) args.push("--allow-all-tools");
   if (opts.silent) args.push("-s");
 
-  const result = spawnSync("copilot", args, { stdio: "inherit", shell: false });
+  const result = spawnSyncCrossPlatform("copilot", args, {
+    stdio: "inherit",
+    shell: false,
+  });
   return result.status ?? 1;
 }

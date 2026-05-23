@@ -2,7 +2,7 @@
 // preferred defaults (allow-all-tools, mode etc.), mirroring `omc`/`omx`
 // bare-command behavior.
 
-import { spawnSync } from "node:child_process";
+import { spawnSyncCrossPlatform } from "../../runtime/resolve-executable.js";
 
 export interface LaunchOptions {
   args: string[];
@@ -16,6 +16,9 @@ export function runLaunch(opts: LaunchOptions): number {
   if (opts.allowAllTools !== false && !args.includes("--allow-all-tools")) {
     args.push("--allow-all-tools");
   }
-  const result = spawnSync("copilot", args, { stdio: "inherit", shell: false });
+  const result = spawnSyncCrossPlatform("copilot", args, {
+    stdio: "inherit",
+    shell: false,
+  });
   return result.status ?? 1;
 }

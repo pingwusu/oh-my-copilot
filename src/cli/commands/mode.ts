@@ -7,10 +7,10 @@
 // sciomc) get `--autopilot` automatically so Copilot keeps continuing until
 // the skill emits a completion signal or the user cancels.
 
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
+import { spawnSyncCrossPlatform } from "../../runtime/resolve-executable.js";
 import { join } from "node:path";
 import { loadConfig } from "../../notifications/config-loader.js";
 import { dispatch } from "../../notifications/dispatcher.js";
@@ -159,7 +159,10 @@ export function runMode(opts: ModeOptions): number {
     // One-shot modes don't get --autopilot.
   }
 
-  const result = spawnSync("copilot", args, { stdio: "inherit", shell: false });
+  const result = spawnSyncCrossPlatform("copilot", args, {
+    stdio: "inherit",
+    shell: false,
+  });
 
   if (isTrackedMode) {
     clearModeState(opts.mode as ModeName);
