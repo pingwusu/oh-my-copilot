@@ -45,6 +45,7 @@ import {
   writeState,
 } from "./commands/state.js";
 import { runStateRalph } from "./commands/state-ralph.js";
+import { runStateUltrawork } from "./commands/state-ultrawork.js";
 import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam } from "./commands/team.js";
 import {
@@ -442,6 +443,10 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         }
         case "ralph": {
           process.exitCode = runStateRalph(args);
+          return;
+        }
+        case "ultrawork": {
+          process.exitCode = runStateUltrawork(args);
           return;
         }
         default:
