@@ -22,7 +22,13 @@ describe("runDoctorTeamRouting", () => {
 
   afterEach(() => {
     process.chdir(prevCwd);
-    rmSync(tmp, { recursive: true, force: true });
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      // Windows EPERM during parallel pool teardown — matches the tolerance
+      // pattern in atomic-write.test.ts and is the documented baseline at
+      // HANDOFF.md (Win vitest worker-fork EPERM since v0.4.0).
+    }
   });
 
   it("returns probes for copilot, tmux, mode state and team availability", () => {
