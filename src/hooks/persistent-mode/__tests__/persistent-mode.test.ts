@@ -212,13 +212,10 @@ describe("ralph continuation", () => {
     expect(result.kind).toBe("noop");
   });
 
-  it("returns COMPLETE message when architectApproved is true", async () => {
+  it("returns noop when architectApproved is true (loop exits cleanly)", async () => {
     writeState(tmpDir, "ralph", makeRalph({ architectApproved: true }));
     const result = await hook.run(makeCtx(tmpDir));
-    expect(result.kind).toBe("advise");
-    if (result.kind === "advise") {
-      expect(result.text).toContain("COMPLETE");
-    }
+    expect(result.kind).toBe("noop");
   });
 
   it("takes priority over ultrawork when both are active", async () => {
@@ -232,7 +229,7 @@ describe("ralph continuation", () => {
     }
   });
 
-  it("requests verification when all PRD stories are complete", async () => {
+  it("returns noop when all PRD stories are complete (allComplete exit)", async () => {
     const omcpDir = join(tmpDir, ".omcp");
     mkdirSync(omcpDir, { recursive: true });
     writeFileSync(
@@ -255,10 +252,7 @@ describe("ralph continuation", () => {
     );
     writeState(tmpDir, "ralph", makeRalph());
     const result = await hook.run(makeCtx(tmpDir));
-    expect(result.kind).toBe("advise");
-    if (result.kind === "advise") {
-      expect(result.text).toContain("VERIFICATION REQUIRED");
-    }
+    expect(result.kind).toBe("noop");
   });
 
   it("uses todo-instruction when no PRD exists", async () => {
@@ -440,5 +434,76 @@ describe("iteration counter increments on Stop", () => {
     const state = readRalphState(tmpDir);
     // State is untouched — still iteration 5
     expect(state?.iteration).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRD allComplete → noop exit (Phase 4.T3)
+// ---------------------------------------------------------------------------
+
+function writePrd(cwd: string, allPasses: boolean): void {
+  const omcpDir = join(cwd, ".omcp");
+  mkdirSync(omcpDir, { recursive: true });
+  writeFileSync(
+    join(omcpDir, "prd.json"),
+    JSON.stringify({
+      project: "test",
+      branchName: "main",
+      description: "Test PRD",
+      userStories: [
+        {
+          id: "US-001",
+          title: "Story 1",
+          description: "desc",
+          acceptanceCriteria: ["ac1"],
+          priority: 1,
+          passes: allPasses,
+        },
+        {
+          id: "US-002",
+          title: "Story 2",
+          description: "desc",
+          acceptanceCriteria: ["ac2"],
+          priority: 2,
+          passes: allPasses,
+        },
+      ],
+    }),
+  );
+}
+
+describe("PRD allComplete exit (Phase 4.T3)", () => {
+  it("returns noop when PRD allComplete", async () => {
+    writePrd(tmpDir, true);
+    writeState(tmpDir, "ralph", makeRalph());
+    const result = await hook.run(makeCtx(tmpDir));
+    expect(result.kind).toBe("noop");
+  });
+
+  it("returns noop when architectApproved=true and PRD allComplete", async () => {
+    writePrd(tmpDir, true);
+    writeState(tmpDir, "ralph", makeRalph({ architectApproved: true }));
+    const result = await hook.run(makeCtx(tmpDir));
+    expect(result.kind).toBe("noop");
+  });
+
+  it("returns advise when PRD has pending stories", async () => {
+    writePrd(tmpDir, false);
+    writeState(tmpDir, "ralph", makeRalph());
+    const result = await hook.run(makeCtx(tmpDir));
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toContain("ralph-continuation");
+    }
+  });
+
+  it("returns advise (continuation) when no PRD exists", async () => {
+    // No PRD file — ralph falls through to the normal iteration path
+    writeState(tmpDir, "ralph", makeRalph());
+    const result = await hook.run(makeCtx(tmpDir));
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toContain("ralph-continuation");
+    }
   });
 });

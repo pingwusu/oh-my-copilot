@@ -128,44 +128,20 @@ function checkRalph(
     };
   }
 
-  // If architectApproved was already set in a prior iteration, honor it.
+  // If architectApproved was already set in a prior iteration, honor it — exit cleanly.
   if (state.architectApproved) {
     clearRalphState(worktreeRoot);
     deactivateUltrawork(worktreeRoot);
-    return {
-      kind: "advise",
-      text: "[RALPH LOOP COMPLETE — VERIFIED] Architect verified task completion. Ralph loop ending.",
-    };
+    return { kind: "noop" };
   }
 
-  // PRD-based completion: all stories pass → request architect verification
+  // PRD-based completion: all stories pass → exit cleanly (noop).
+  // The architect-approval check above handles approval detection; if we
+  // reach here with allComplete, ralph is done — noop lets Copilot stop.
   const prdStatus = getPrdCompletionStatus(worktreeRoot);
   if (prdStatus.hasPrd && prdStatus.allComplete) {
-    // Request verification from configured reviewer
-    const stateExtra = state as unknown as Record<string, unknown>;
-    const reviewerLabel =
-      typeof stateExtra.critic_mode === "string"
-        ? (stateExtra.critic_mode as string)
-        : "architect";
-    return {
-      kind: "advise",
-      text: `<ralph-verification-required>
-
-[RALPH — VERIFICATION REQUIRED]
-
-All ${prdStatus.status?.total ?? 0} PRD stories are marked passes: true.
-
-Before stopping, run the configured reviewer (${reviewerLabel}) to verify task completion.
-Ask the reviewer: "Please verify all acceptance criteria are met. If everything is complete, respond with: <architect-approved>VERIFIED_COMPLETE</architect-approved>"
-
-If verified, the loop will exit on the next Stop event.
-
-</ralph-verification-required>
-
----
-
-`,
-    };
+    clearRalphState(worktreeRoot);
+    return { kind: "noop" };
   }
 
   // Check for architect rejection in context text
