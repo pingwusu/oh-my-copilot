@@ -19,7 +19,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { Hook, HookContext, HookResult } from "../hook-types.js";
-import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import {
   getOmcpRoot,
   OmcpPaths,

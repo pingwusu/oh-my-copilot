@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-05-23
+
+### Added — Phase 2: N+2 hook ports (persistent-mode, todo-continuation, omc-orchestrator)
+
+Unblocked by Phase 1.5 investigation (commits `ac55a47`–`2dcf27d`) which
+identified that all hook crashes originated from OMC's `$CLAUDE_PLUGIN_ROOT`
+Bash variable in PowerShell context — omcp's own hook infrastructure was
+correct throughout.
+
+- `src/hooks/persistent-mode/index.ts` (T1, commit `2dcf27d`) — Stop event.
+  Priority-ordered continuation enforcement: Ralph > Ultrawork > Todo.
+  Ralph path increments iteration counter, injects continuation prompt with
+  PRD/todo context, and requests architect verification when all PRD stories
+  pass. Ultrawork path increments reinforcement counter. Todo path surfaces
+  next pending item with attempt-limit (5) to prevent infinite loops.
+  Returns `advise` (Copilot Stop does not support hard-blocking).
+  26 tests.
+
+- `src/hooks/todo-continuation/index.ts` (T2, commit `10dd450`) — Stop event.
+  Reads `.omcp/state/todos-state.json` via `checkIncompleteTodos`. Injects
+  `TODO_CONTINUATION_PROMPT` when pending/in-progress todos remain.
+  Escape hatches: context-limit, rate-limit, auth error, cancel, user abort.
+  Tests in `src/hooks/todo-continuation/__tests__/`.
+
+- `src/hooks/omc-orchestrator/index.ts` (T3, commit `10dd450`) — PreToolUse
+  + PostToolUse events. Enforces delegation over direct implementation.
+  Three modes: off (noop), warn (advise), strict (block). Tracks write-tool
+  calls outside `.omcp/` and injects `DIRECT_WORK_REMINDER`. Surfaces boulder
+  plan-progress after delegation tools complete.
+  Tests in `src/hooks/omc-orchestrator/__tests__/`.
+
+**Test count:** 742 → 830 passing (+88). Build clean (tsc, no diagnostics).
+
 ### Correction — Retraction of v0.12.0 "upstream Copilot bug" framing (2026-05-23 mid-day)
 
 The v0.12.0 section below attributed the `SyntaxError: Unexpected token ':'`
