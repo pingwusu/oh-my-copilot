@@ -6,14 +6,17 @@
 //   3. mirror agents/, skills/, plugins/, .claude-plugin/, .mcp.json, prompts/,
 //      templates/, AGENTS.md into the installed-plugins cache
 //   4. upsert the marketplace file (~/.copilot/marketplaces/oh-my-copilot.json)
-//   5. upsert the omcp entry in ~/.copilot/config.json
-//   6. merge MCP servers into ~/.copilot/mcp-config.json with PLUGIN_ROOT substitution
+//   5. upsert the omcp plugin entry + statusLine in ~/.copilot/config.json
+//   6. write hook entries to ~/.copilot/settings.json (Copilot reads hooks from there)
+//   7. merge MCP servers into ~/.copilot/mcp-config.json with PLUGIN_ROOT substitution
 
 import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-  applyOmcpRuntimeWiring,
+  applyOmcpConfigWiring,
+  applyOmcpHookWiring,
   type CopilotConfig,
+  type CopilotHooksMap,
   hasOmcpHookWiring,
   hasOmcpStatusLine,
   type McpConfig,
@@ -103,13 +106,21 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
   };
   if (!dryRun) writeJson(paths.omcpMarketplaceFile, marketplace);
 
+  // config.json: plugin registration + statusLine (no hooks — Copilot reads
+  // hooks from settings.json per wire-probe-for-tui.mjs:31-35)
   const config = readJsonOrDefault<CopilotConfig>(paths.copilotConfig, {});
   const withPlugin = upsertOmcpPlugin(config, version, paths.omcpPluginDir);
-  const nextConfig = applyOmcpRuntimeWiring(withPlugin);
+  const nextConfig = applyOmcpConfigWiring(withPlugin);
   if (!dryRun) writeJson(paths.copilotConfig, nextConfig);
-  const hooksWired = hasOmcpHookWiring(
-    (nextConfig.hooks as Parameters<typeof hasOmcpHookWiring>[0]) ?? undefined,
-  );
+
+  // settings.json: hook entries only
+  const settingsConfig = readJsonOrDefault<CopilotConfig>(paths.copilotSettings, {});
+  const existingHooks = (settingsConfig.hooks as CopilotHooksMap | undefined) ?? undefined;
+  const nextHooks = applyOmcpHookWiring(existingHooks);
+  const nextSettings: CopilotConfig = { ...settingsConfig, hooks: nextHooks };
+  if (!dryRun) writeJson(paths.copilotSettings, nextSettings);
+
+  const hooksWired = hasOmcpHookWiring(nextHooks);
   const statusLineWired = hasOmcpStatusLine(
     (nextConfig.statusLine as Parameters<typeof hasOmcpStatusLine>[0]) ?? undefined,
   );

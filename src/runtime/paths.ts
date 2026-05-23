@@ -7,6 +7,8 @@ import { join } from "node:path";
 export interface OmcpPaths {
   copilotHome: string;
   copilotConfig: string;
+  /** Copilot CLI reads hook entries from settings.json, not config.json. */
+  copilotSettings: string;
   copilotMcpConfig: string;
   installedPlugins: string;
   marketplaces: string;
@@ -19,6 +21,7 @@ export function resolvePaths(env: NodeJS.ProcessEnv = process.env): OmcpPaths {
   return {
     copilotHome,
     copilotConfig: join(copilotHome, "config.json"),
+    copilotSettings: join(copilotHome, "settings.json"),
     copilotMcpConfig: join(copilotHome, "mcp-config.json"),
     installedPlugins: join(copilotHome, "installed-plugins"),
     marketplaces: join(copilotHome, "marketplaces"),

@@ -56,9 +56,9 @@ describe("doctor checks", () => {
     expect(hookCheck?.level).toBe("warn");
   });
 
-  it("reports ok hook wiring when config.json has omcp __omcp entries", () => {
-    const config = {
-      installedPlugins: [],
+  it("reports ok hook wiring when settings.json has omcp __omcp entries", () => {
+    // Hooks live in settings.json (Copilot 1.0.48+ reads hooks from there).
+    const settings = {
       hooks: {
         PreToolUse: [
           {
@@ -73,6 +73,11 @@ describe("doctor checks", () => {
           },
         ],
       },
+    };
+    writeFileSync(join(tmp, "settings.json"), JSON.stringify(settings, null, 2));
+    // statusLine stays in config.json
+    const config = {
+      installedPlugins: [],
       statusLine: {
         type: "command",
         command: "omcp hud",

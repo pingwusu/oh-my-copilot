@@ -47,15 +47,18 @@ describe("runSetup", () => {
     expect(mcp.mcpServers["omcp-trace"]).toBeDefined();
     expect(mcp.mcpServers["omcp-project-memory"]).toBeDefined();
 
-    // Hook + statusLine wiring landed in config.json.
+    // Hooks land in settings.json (Copilot 1.0.48+ reads hooks from there).
+    // statusLine stays in config.json.
     expect(report.hooksWired).toBe(true);
     expect(report.statusLineWired).toBe(true);
-    expect(config.hooks).toBeDefined();
-    expect(config.hooks.PreToolUse).toBeDefined();
-    expect(config.hooks.PreToolUse[0].hooks[0].command).toContain(
+    const settings = JSON.parse(readFileSync(join(tmp, "settings.json"), "utf8"));
+    expect(settings.hooks).toBeDefined();
+    expect(settings.hooks.PreToolUse).toBeDefined();
+    expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain(
       "omcp hook fire PreToolUse --json",
     );
-    expect(config.hooks.PreToolUse[0].hooks[0].__omcp).toBe(true);
+    expect(settings.hooks.PreToolUse[0].hooks[0].__omcp).toBe(true);
+    expect(config.hooks).toBeUndefined();
     expect(config.statusLine).toBeDefined();
     expect(config.statusLine.command).toBe("omcp hud");
     expect(config.statusLine.__omcp).toBe(true);
@@ -70,27 +73,27 @@ describe("runSetup", () => {
 
   it("re-running setup preserves user-authored hook entries", async () => {
     const packageRoot = join(__dirname, "..", "..");
-    // 1. First setup writes omcp wiring.
+    // 1. First setup writes omcp wiring to settings.json.
     await runSetup({ packageRoot });
-    // 2. User edits config.json to add a custom hook.
-    const cfgPath = join(tmp, "config.json");
-    const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
-    cfg.hooks.PreToolUse.unshift({
+    // 2. User edits settings.json to add a custom hook.
+    const settingsPath = join(tmp, "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    settings.hooks.PreToolUse.unshift({
       matcher: "Bash",
       hooks: [{ type: "command", command: "echo user-custom" }],
     });
-    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     // 3. Re-run setup — user entry must survive.
     const report2 = await runSetup({ packageRoot });
-    const cfg2 = JSON.parse(readFileSync(cfgPath, "utf8"));
+    const settings2 = JSON.parse(readFileSync(settingsPath, "utf8"));
     expect(report2.hooksWired).toBe(true);
-    const userMatcher = cfg2.hooks.PreToolUse.find(
+    const userMatcher = settings2.hooks.PreToolUse.find(
       (m: { matcher?: string }) => m.matcher === "Bash",
     );
     expect(userMatcher).toBeDefined();
     expect(userMatcher.hooks[0].command).toBe("echo user-custom");
     // Exactly one omcp-managed matcher.
-    const omcpMatchers = cfg2.hooks.PreToolUse.filter(
+    const omcpMatchers = settings2.hooks.PreToolUse.filter(
       (m: { hooks: { __omcp?: boolean }[] }) =>
         m.hooks.some((h) => h.__omcp === true),
     );

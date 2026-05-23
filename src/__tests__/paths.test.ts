@@ -13,6 +13,7 @@ describe("resolvePaths", () => {
     const paths = resolvePaths({ OMCP_HOME: "/custom/home" });
     expect(paths.copilotHome).toBe("/custom/home");
     expect(paths.copilotConfig).toMatch(/config\.json$/);
+    expect(paths.copilotSettings).toMatch(/settings\.json$/);
     expect(paths.omcpPluginDir).toContain("installed-plugins");
     expect(paths.omcpPluginDir).toContain("oh-my-copilot");
   });

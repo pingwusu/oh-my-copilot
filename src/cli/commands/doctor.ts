@@ -2,12 +2,15 @@
 // Runs a sequence of probes and prints a single-line verdict per check.
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import {
   type CopilotConfig,
+  type CopilotHooksMap,
   hasOmcpHookWiring,
   hasOmcpStatusLine,
   readJsonOrDefault,
+  writeJson,
 } from "../../runtime/copilot-config.js";
 import { resolvePaths } from "../../runtime/paths.js";
 import { probeTeamModeState } from "./doctor-team-routing.js";
@@ -96,26 +99,28 @@ export function runDoctor(): CheckResult[] {
     detail: existsSync(agentsDir) ? agentsDir : "agents/ not yet mirrored",
   });
 
-  // 7. Copilot CLI hook wiring (Case A: settings-driven hooks).
-  // Reads ~/.copilot/config.json and confirms omcp-managed entries are present
-  // in `hooks`. Reports `ok` when wired, `warn` otherwise — never `fail`,
-  // because hooks are an opt-in convenience layer.
-  if (existsSync(paths.copilotConfig)) {
-    try {
+  // 7. Copilot CLI hook wiring — hooks live in settings.json (1.0.48+).
+  // Also checks for stale omcp hooks in config.json and migrates them.
+  try {
+    // Check settings.json for current hook wiring
+    const settings = readJsonOrDefault<CopilotConfig>(paths.copilotSettings, {});
+    const hookWired = hasOmcpHookWiring(
+      settings.hooks as Parameters<typeof hasOmcpHookWiring>[0],
+    );
+    checks.push({
+      name: "hook wiring",
+      level: hookWired ? "ok" : "warn",
+      detail: hookWired
+        ? "omcp hook entries present in settings.json"
+        : "not wired — run `omcp setup` (see docs/architecture/hooks-wiring.md)",
+    });
+
+    // Check statusLine in config.json (it stays there)
+    if (existsSync(paths.copilotConfig)) {
       const cfg = readJsonOrDefault<CopilotConfig>(paths.copilotConfig, {});
-      const hookWired = hasOmcpHookWiring(
-        cfg.hooks as Parameters<typeof hasOmcpHookWiring>[0],
-      );
       const statusWired = hasOmcpStatusLine(
         cfg.statusLine as Parameters<typeof hasOmcpStatusLine>[0],
       );
-      checks.push({
-        name: "hook wiring",
-        level: hookWired ? "ok" : "warn",
-        detail: hookWired
-          ? "omcp hook entries present in config.json"
-          : "not wired — run `omcp setup` (see docs/architecture/hooks-wiring.md)",
-      });
       checks.push({
         name: "statusLine wiring",
         level: statusWired ? "ok" : "warn",
@@ -123,18 +128,72 @@ export function runDoctor(): CheckResult[] {
           ? "omcp hud configured as statusLine.command"
           : "not wired — run `omcp setup` to enable `omcp hud` as statusLine",
       });
-    } catch (err) {
+
+      // Migration: detect omcp-owned hooks in the old config.json location
+      const cfgHooks = cfg.hooks as CopilotHooksMap | undefined;
+      if (cfgHooks && hasOmcpHookWiring(cfgHooks)) {
+        // Auto-migrate OMCP-owned hooks (identified by `omcp hook fire` command)
+        // to settings.json. User-authored hooks are left in place with a warning.
+        const backupPath = `${paths.copilotConfig}.pre-omcp-migration-backup`;
+        copyFileSync(paths.copilotConfig, backupPath);
+
+        // Separate omcp-owned from user-authored entries
+        const migratedHooks: CopilotHooksMap = {};
+        const remainingHooks: CopilotHooksMap = {};
+        for (const [event, matchers] of Object.entries(cfgHooks)) {
+          const omcpMatchers = (matchers ?? []).filter((m) =>
+            m.hooks.some((h) => h.__omcp === true),
+          );
+          const userMatchers = (matchers ?? []).filter((m) =>
+            m.hooks.some((h) => h.__omcp !== true),
+          );
+          if (omcpMatchers.length > 0) migratedHooks[event] = omcpMatchers;
+          if (userMatchers.length > 0) remainingHooks[event] = userMatchers;
+        }
+
+        // Merge omcp hooks into settings.json
+        const existingSettings = readJsonOrDefault<CopilotConfig>(paths.copilotSettings, {});
+        const existingSettingsHooks = (existingSettings.hooks as CopilotHooksMap | undefined) ?? {};
+        const mergedSettingsHooks: CopilotHooksMap = { ...existingSettingsHooks, ...migratedHooks };
+        writeJson(paths.copilotSettings, { ...existingSettings, hooks: mergedSettingsHooks });
+
+        // Remove omcp hooks from config.json; leave user hooks intact
+        const nextCfg: CopilotConfig = { ...cfg };
+        if (Object.keys(remainingHooks).length > 0) {
+          nextCfg.hooks = remainingHooks;
+        } else {
+          delete nextCfg.hooks;
+        }
+        atomicWriteFileSync(paths.copilotConfig, `${JSON.stringify(nextCfg, null, 2)}\n`);
+
+        checks.push({
+          name: "hook migration",
+          level: "ok",
+          detail: `migrated omcp hooks from config.json → settings.json (backup: ${backupPath})`,
+        });
+
+        // Warn about any user-authored hooks left in config.json
+        if (Object.keys(remainingHooks).length > 0) {
+          checks.push({
+            name: "hook migration (user hooks)",
+            level: "warn",
+            detail:
+              "user-authored hooks remain in config.json — move them to settings.json manually for Copilot 1.0.48+ to fire them",
+          });
+        }
+      }
+    } else {
       checks.push({
-        name: "hook wiring",
+        name: "statusLine wiring",
         level: "warn",
-        detail: `unable to parse config.json: ${(err as Error).message}`,
+        detail: "config.json not present — run `omcp setup` to wire hooks",
       });
     }
-  } else {
+  } catch (err) {
     checks.push({
       name: "hook wiring",
       level: "warn",
-      detail: "config.json not present — run `omcp setup` to wire hooks",
+      detail: `unable to check hook wiring: ${(err as Error).message}`,
     });
   }
 

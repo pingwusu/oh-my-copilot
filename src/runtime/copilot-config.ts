@@ -93,9 +93,14 @@ export function mergeMcpServers(
 // Copilot CLI `hooks` and `statusLine` wiring
 // ---------------------------------------------------------------------------
 //
-// Copilot CLI 1.0.32+ reads inline `hooks` and `statusLine` fields from
-// ~/.copilot/config.json. The `hooks` value uses the same shape as
-// `.github/hooks/*.json` and Claude Code's hooks config:
+// Copilot CLI 1.0.48-1.0.52+ reads hook entries from ~/.copilot/settings.json
+// (proven by scripts/smoke/wire-probe-for-tui.mjs:31-35). The `statusLine`
+// and plugin registration fields (installedPlugins, enabledPlugins) remain in
+// ~/.copilot/config.json. omcp writes to both files: hooks → settings.json,
+// everything else → config.json. Never consolidate — Copilot's read surfaces
+// for each are separate and documented separately.
+//
+// The `hooks` value shape:
 //
 //   {
 //     "<EventName>": [
@@ -302,8 +307,37 @@ export function mergeCopilotStatusLine(
 }
 
 /**
- * Apply hooks + statusLine wiring on top of an existing CopilotConfig in a
- * single pass. Returns a new config object; never mutates `config`.
+ * Build the merged hooks map for writing to settings.json.
+ * Returns only the `hooks` field — callers write it to paths.copilotSettings.
+ */
+export function applyOmcpHookWiring(
+  existing: CopilotHooksMap | undefined,
+  opts: MergeHookOptions = {},
+): CopilotHooksMap {
+  return mergeCopilotHooks(existing, opts);
+}
+
+/**
+ * Apply statusLine wiring on top of an existing CopilotConfig for config.json.
+ * Hooks are NOT included — those belong in settings.json via applyOmcpHookWiring.
+ * Returns a new config object; never mutates `config`.
+ */
+export function applyOmcpConfigWiring(
+  config: CopilotConfig,
+  opts: MergeStatusLineOptions = {},
+): CopilotConfig {
+  const existingStatus = (config.statusLine as CopilotStatusLine | undefined) ?? undefined;
+  const nextStatus = mergeCopilotStatusLine(existingStatus, opts);
+  return {
+    ...config,
+    statusLine: nextStatus,
+  };
+}
+
+/**
+ * @deprecated Use applyOmcpHookWiring (→ settings.json) and applyOmcpConfigWiring
+ * (→ config.json) separately. This combined form writes hooks to config.json,
+ * which Copilot CLI 1.0.48+ does NOT read for hook dispatch.
  */
 export function applyOmcpRuntimeWiring(
   config: CopilotConfig,
