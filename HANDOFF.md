@@ -63,6 +63,109 @@ Full verdict + reproduction steps at `docs/architecture/hooks-modifiedresult-ver
 
 ---
 
+## 2026-05-23 Hook Architecture Re-verdict (supersedes much of Phase 1)
+
+A follow-up TUI-mode smoke confirmed the prior Phase 1 verdict was based
+on incomplete evidence. **The corrected picture is in this section — when
+it disagrees with the Phase 1 paragraph above, this section wins.**
+
+### What was wrong with the Phase 1 verdict
+
+Phase 1 concluded "Copilot CLI in `copilot -p` mode does NOT fire ANY
+hooks" because `~/.copilot/omcp-smoke-probe.log` never appeared. That
+inference assumed the probe would write to the log whenever Copilot
+dispatched a hook. The corrected sequence below shows that assumption
+was wrong.
+
+### What the 2026-05-23 TUI smoke actually found
+
+Wiring debug probes (4 event-name variants × multiple command forms)
+into `~/.copilot/settings.json.hooks` and exercising Copilot in TUI mode
+produced the following behaviour (Copilot CLI 1.0.51, Windows 11,
+Node 24.14.1):
+
+1. **Hooks DO fire in TUI mode** for every event (`SessionStart`,
+   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`). Copilot's
+   log under `~/.copilot/logs/process-*.log` records each dispatch.
+2. **Every hook crashes with the same Node stack** before any user code
+   runs:
+   ```
+   SyntaxError: Unexpected token ':'
+       at makeContextifyScript (node:internal/vm:194:14)
+       at compileScript (node:internal/process/execution:388:10)
+       at evalTypeScript (node:internal/process/execution:260:22)
+       at node:internal/main/eval_stdin:51:5
+   ```
+3. **The stderr above the stack is the hook event JSON itself**, e.g.
+   `{"hook_event_name":"UserPromptSubmit","session_id":"…",…}`. Copilot
+   pipes that JSON into `node --input-type=ts -` and Node tries to
+   compile it as TypeScript. JSON is not valid TS at top level
+   (`{ "key": …` is parsed as a block with a string literal followed by
+   an unexpected `:`), so every hook dies with code 1.
+4. **All hook command formats were tried — every one fails identically:**
+   - `command: 'node "C:\…\\probe.mjs" pre-camel'` (omc-style)
+   - `command: 'cmd.exe /c exit 0'` (minimal Windows command)
+   - `command: '"C:\\…\\probe-simple.cmd" post-camel'` (.cmd wrapper)
+   - `command: 'require("fs").appendFileSync(...)'` (inline JS)
+   - `powershell: 'Add-Content -Path … -Value …'` (explicit PowerShell field)
+5. **The bundle's published shell dispatcher (`VKi` → `pwsh.exe -nop
+   -nol -c <command>` on Windows / `bash.exe --norc --noprofile -c
+   <command>` on POSIX) is NOT the code path actually used at runtime.**
+   The runtime path goes through `node --input-type=ts -` regardless of
+   what is wired.
+6. **Wiring location does not matter.** Hooks loaded from
+   `~/.copilot/settings.json.hooks`, from
+   `~/.copilot/installed-plugins/<plugin>/hooks/hooks.json`, and from
+   `<config>/hooks/**/*.json` all fail identically.
+7. **omc's own hooks are also affected.** The omc plugin's
+   `hooks/hooks.json` registers many PascalCase events with
+   `command: "node \"$CLAUDE_PLUGIN_ROOT\"/scripts/run.cjs …"` —
+   verified to produce the same SyntaxError on every fire under the
+   current Copilot install.
+
+### Implications
+
+This appears to be a **Copilot CLI 1.0.51 bug on Windows** (Node 24.x),
+not an omcp wiring error. Until it is fixed upstream:
+
+- Phase 1 conclusion that `-p` mode "doesn't fire" was misleading. Hooks
+  fire in BOTH `-p` and TUI modes; the probe just never reached its log
+  line because Copilot's executor crashed Node before the script ran.
+- Phase 4 hallucination-shield "advise-only fallback" downgrade was
+  motivated by the Phase 1 verdict and should be re-evaluated.
+- Phase 2 Batch C N+2 (port `persistent-mode`, `todo-continuation`,
+  `omc-orchestrator` hooks) cannot land on this Copilot version — the
+  hooks would compile and ship, but the runtime would crash them on
+  every fire. Recommend BLOCKED-UPSTREAM status until Copilot fixes the
+  hook executor, or a Copilot version where hooks demonstrably work
+  becomes the baseline.
+- omcp's lib/ subsystem ports (Phase 2 Batch C N+1, this session's
+  6 files) are unaffected — they back MCP servers and CLI verbs that
+  do not depend on hooks firing.
+
+### Reproduction
+
+Repository utilities added in this session:
+
+- `scripts/smoke/debug-probe.mjs` — captures argv / env / cwd / stdin
+  context Copilot hands to a hook, then exits 0.
+- `scripts/smoke/wire-probe-for-tui.mjs <wire|check|unwire>` — installs
+  the debug probe into `~/.copilot/settings.json.hooks` (backup +
+  restore) so an interactive Copilot TUI session can exercise it.
+
+Use them when re-validating against a future Copilot CLI release.
+
+### Cleanup performed this session
+
+The previous session left 4 `__omcpSmoke: true` hook entries in
+`~/.copilot/settings.json.hooks` (pointing at the unbacked
+`probe-modifiedresult.mjs`). They were emitting 18 stale
+`HookExitCodeError` entries per TUI session into Copilot's log. Removed
+during this debug pass; safety backup at
+`~/.copilot/settings.json.pre-omcp-cleanup-backup` for one cycle.
+
+---
+
 ## Phase 2 deferred-hooks scope (next session decision point)
 
 The 3 Phase 2 hooks (`persistent-mode`, `todo-continuation`, `omc-orchestrator`) depend on **6+ omc-internal
