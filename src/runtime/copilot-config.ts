@@ -2,8 +2,10 @@
 // We never overwrite unrelated keys; we only add/refresh the omcp plugin entry.
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import { atomicWriteFileSync } from "./atomic-write.js";
+import { findExecutable } from "./resolve-executable.js";
 
 export interface InstalledPlugin {
   name: string;
@@ -229,6 +231,51 @@ function omcpHookCommand(event: string, omcpBin: string): string {
   return `${omcpBin} hook fire ${event} --json`;
 }
 
+export interface ResolveOmcpBinOptions {
+  /**
+   * Override the PATH lookup. Defaults to `findExecutable` from
+   * resolve-executable.ts. Injectable for tests.
+   */
+  findOmcpOnPath?: (name: string) => string | null;
+  /**
+   * Override the package-root used to resolve the absolute-path fallback.
+   * Defaults to two levels up from this file's runtime location
+   * (`dist/runtime/copilot-config.js` → `dist/` → package root).
+   * Injectable for tests so we don't depend on the on-disk dist/.
+   */
+  packageRoot?: string;
+}
+
+function defaultPackageRoot(): string {
+  // At runtime this file is `dist/runtime/copilot-config.js`. Climbing two
+  // levels lands at the package root (which `package.json#files` ships with
+  // `dist/cli/omcp.js`).
+  const here = dirname(fileURLToPath(import.meta.url));
+  return resolvePath(here, "..", "..");
+}
+
+/**
+ * Resolve the value emitted into `hooks[<event>][].hooks[].command` as the
+ * `omcp` invocation. The default flow:
+ *
+ *   1. If `omcp` resolves on PATH (npm-linked or globally installed shim)
+ *      → return the literal `"omcp"`. Compact, portable, the common case.
+ *   2. Otherwise → emit `node "<absolute path to dist/cli/omcp.js>"`.
+ *      This is pre-mortem #1 from orchestrator-v1: when the user has not
+ *      run `npm link` / `npm install -g`, the hook command still needs to
+ *      dispatch to a valid Node script — the absolute path always works.
+ *
+ * The optional `omcpBin` argument on `MergeHookOptions` continues to take
+ * precedence over this auto-detection — tests pass an explicit override to
+ * avoid hitting `findExecutable` entirely.
+ */
+export function resolveDefaultOmcpBin(opts: ResolveOmcpBinOptions = {}): string {
+  const finder = opts.findOmcpOnPath ?? findExecutable;
+  if (finder("omcp")) return "omcp";
+  const root = opts.packageRoot ?? defaultPackageRoot();
+  return `node "${join(root, "dist", "cli", "omcp.js")}"`;
+}
+
 /**
  * Merge omcp's hook entries into a Copilot `hooks` map without disturbing
  * user-authored entries for the same events. Existing omcp-managed entries
@@ -238,7 +285,10 @@ export function mergeCopilotHooks(
   existing: CopilotHooksMap | undefined,
   opts: MergeHookOptions = {},
 ): CopilotHooksMap {
-  const omcpBin = opts.omcpBin ?? "omcp";
+  // `opts.omcpBin` (explicit override) wins. Otherwise auto-detect via
+  // `resolveDefaultOmcpBin` so the absolute-path fallback kicks in when
+  // `omcp` is not on PATH (pre-mortem #1 closure).
+  const omcpBin = opts.omcpBin ?? resolveDefaultOmcpBin();
   const timeout = opts.timeoutSec ?? 5;
   const events = opts.events ?? OMCP_HOOK_EVENTS;
   const next: CopilotHooksMap = {};
