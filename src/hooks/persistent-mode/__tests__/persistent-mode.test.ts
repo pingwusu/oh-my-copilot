@@ -362,3 +362,52 @@ describe("todo continuation", () => {
     expect(result.kind).toBe("noop");
   });
 });
+
+// ---------------------------------------------------------------------------
+// detectArchitectApproval wiring (Phase 4.T1)
+// ---------------------------------------------------------------------------
+
+describe("architect approval detection", () => {
+  it("detects approval in toolResult and completes the ralph loop", async () => {
+    writeState(tmpDir, "ralph", makeRalph());
+    const ctx = makeCtx(tmpDir, {
+      toolResult: {
+        response: "<architect-approved>VERIFIED_COMPLETE</architect-approved>",
+      },
+    });
+    const result = await hook.run(ctx);
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toContain("COMPLETE");
+      expect(result.text).toContain("VERIFIED");
+    }
+  });
+
+  it("continues loop (no COMPLETE) when no approval signal is present", async () => {
+    writeState(tmpDir, "ralph", makeRalph());
+    const ctx = makeCtx(tmpDir, {
+      toolResult: { response: "Still working on the feature implementation." },
+    });
+    const result = await hook.run(ctx);
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toContain("ralph-continuation");
+      expect(result.text).not.toContain("COMPLETE");
+    }
+  });
+
+  it("does not false-positive on text that contains VERIFIED_COMPLETE without the approved tag", async () => {
+    writeState(tmpDir, "ralph", makeRalph());
+    const ctx = makeCtx(tmpDir, {
+      toolResult: {
+        response: "The task is VERIFIED_COMPLETE but without the architect tag.",
+      },
+    });
+    const result = await hook.run(ctx);
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toContain("ralph-continuation");
+      expect(result.text).not.toContain("RALPH LOOP COMPLETE — VERIFIED");
+    }
+  });
+});

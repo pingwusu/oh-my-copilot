@@ -82,30 +82,65 @@ function extractStopContext(ctx: HookContext): StopContext {
   };
 }
 
+/**
+ * Extract a plain-text string from the Stop hook context for pattern matching.
+ *
+ * Copilot may surface the session's last response or transcript in toolResult
+ * or toolArgs. We join all string-valued leaves into one searchable blob so
+ * detectArchitectApproval can scan it regardless of where Copilot puts it.
+ */
+function extractContextText(ctx: HookContext): string {
+  const parts: string[] = [];
+  for (const bag of [ctx.toolResult, ctx.toolArgs]) {
+    if (!bag) continue;
+    if (typeof bag === "string") {
+      parts.push(bag);
+    } else if (typeof bag === "object" && bag !== null) {
+      for (const v of Object.values(bag as Record<string, unknown>)) {
+        if (typeof v === "string") parts.push(v);
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Ralph check
 // ---------------------------------------------------------------------------
 
 function checkRalph(
   worktreeRoot: string,
-  sessionId?: string,
+  contextText: string,
 ): HookResult | null {
   const state = readRalphState(worktreeRoot);
   if (!state || !state.active) return null;
 
+  // Check for architect approval in the stop context text.
+  // When detected: persist architectApproved=true to state so the next
+  // iteration check (state.architectApproved) also exits cleanly.
+  if (detectArchitectApproval(contextText)) {
+    writeRalphState({ ...state, architectApproved: true }, worktreeRoot);
+    clearRalphState(worktreeRoot);
+    deactivateUltrawork(worktreeRoot);
+    return {
+      kind: "advise",
+      text: "[RALPH LOOP COMPLETE — VERIFIED] Architect verified task completion. Ralph loop ending.",
+    };
+  }
+
+  // If architectApproved was already set in a prior iteration, honor it.
+  if (state.architectApproved) {
+    clearRalphState(worktreeRoot);
+    deactivateUltrawork(worktreeRoot);
+    return {
+      kind: "advise",
+      text: "[RALPH LOOP COMPLETE — VERIFIED] Architect verified task completion. Ralph loop ending.",
+    };
+  }
+
   // PRD-based completion: all stories pass → request architect verification
   const prdStatus = getPrdCompletionStatus(worktreeRoot);
   if (prdStatus.hasPrd && prdStatus.allComplete) {
-    // If already architect-approved, clear and allow stop
-    if (state.architectApproved) {
-      clearRalphState(worktreeRoot);
-      deactivateUltrawork(worktreeRoot);
-      return {
-        kind: "advise",
-        text: "[RALPH LOOP COMPLETE — ARCHITECT VERIFIED] All PRD stories complete and verified. Excellent work!",
-      };
-    }
-
     // Request verification from configured reviewer
     const stateExtra = state as unknown as Record<string, unknown>;
     const reviewerLabel =
@@ -130,18 +165,6 @@ If verified, the loop will exit on the next Stop event.
 ---
 
 `,
-    };
-  }
-
-  // Check for architect approval in current session's latest output
-  // (passed via toolArgs if the host provides transcript context)
-  const contextText = typeof sessionId === "string" ? sessionId : "";
-  if (state.architectApproved || detectArchitectApproval(contextText)) {
-    clearRalphState(worktreeRoot);
-    deactivateUltrawork(worktreeRoot);
-    return {
-      kind: "advise",
-      text: "[RALPH LOOP COMPLETE — VERIFIED] Architect verified task completion. Ralph loop ending.",
     };
   }
 
@@ -280,8 +303,12 @@ export function createPersistentModeHook(): Hook {
       const worktreeRoot = ctx.cwd;
       const sessionId = ctx.sessionId || undefined;
 
+      // Extract text from the stop context for architect-approval detection.
+      // Copilot may surface the session transcript or last response in toolResult.
+      const stopContextText = extractContextText(ctx);
+
       // Priority 1: Ralph
-      const ralphResult = checkRalph(worktreeRoot, sessionId);
+      const ralphResult = checkRalph(worktreeRoot, stopContextText);
       if (ralphResult) return ralphResult;
 
       // Priority 2: Ultrawork
