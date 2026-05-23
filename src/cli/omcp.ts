@@ -49,7 +49,7 @@ import { runStateBoulder } from "./commands/state-boulder.js";
 import { runStateTodo } from "./commands/state-todo.js";
 import { runStateUltrawork } from "./commands/state-ultrawork.js";
 import { formatStatus, readStatus } from "./commands/status.js";
-import { parseTeamSpec, runTeam } from "./commands/team.js";
+import { parseTeamSpec, runTeam, runTeamMergeShards } from "./commands/team.js";
 import {
   formatTeleportList,
   listTeleports,
@@ -251,8 +251,61 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       console.log(`  logs:    ${report.logDir}`);
     });
 
-  // Mode launchers: `omcp ralph "task"`, `omcp autopilot "task"`, etc.
+  program
+    .command("team-merge-shards <team-name>")
+    .description("Merge per-worker PRD shards into the canonical PRD (see omcp team)")
+    .action((teamName: string) => {
+      const result = runTeamMergeShards(teamName, { cwd: process.cwd() });
+      if (!result.ok) {
+        console.error(`omcp team-merge-shards: ${result.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      const r = result.report!;
+      console.log(`omcp team-merge-shards complete`);
+      console.log(`  team:           ${r.teamName}`);
+      console.log(`  shards merged:  ${r.shardsProcessed}`);
+      console.log(`  stories updated:${r.storiesUpdated}`);
+      console.log(`  conflicts:      ${r.conflicts.length}`);
+    });
+
+  // ralph gets an extra --prd option for PRD-driven execution.
+  program
+    .command("ralph <task...>")
+    .description("Run /oh-my-copilot:ralph non-interactively against Copilot")
+    .option("--family <family>", "model family: claude | gpt | auto", "auto")
+    .option("--agent <name>", "use a specific omcp agent's recommended model")
+    .option("--silent", "suppress stats banner from Copilot")
+    .option("--max-continues <n>", "cap autopilot continuation count", (v) => Number(v))
+    .option("--prd <path>", "path to PRD JSON file for story-driven execution")
+    .action(
+      (
+        taskParts: string[],
+        opts: {
+          family?: string;
+          agent?: string;
+          silent?: boolean;
+          maxContinues?: number;
+          prd?: string;
+        },
+      ) => {
+        const code = runMode({
+          mode: "ralph",
+          task: taskParts.join(" "),
+          family: opts.family as "claude" | "gpt" | "auto" | undefined,
+          agent: opts.agent,
+          agentsDir: resolve(packageRoot, "agents"),
+          silent: opts.silent,
+          maxContinues: opts.maxContinues,
+          prdPath: opts.prd,
+        });
+        process.exitCode = code;
+      },
+    );
+
+  // Mode launchers: `omcp autopilot "task"`, etc. (ralph is registered above).
   for (const mode of MODE_COMMANDS) {
+    if (mode === "ralph") continue;
     program
       .command(`${mode} <task...>`)
       .description(`Run /oh-my-copilot:${mode} non-interactively against Copilot`)

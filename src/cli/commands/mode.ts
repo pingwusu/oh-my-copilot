@@ -27,6 +27,11 @@ import {
   clearModeState,
   writeModeState,
 } from "../../runtime/mode-state.js";
+import {
+  writeRalphState,
+  clearRalphState,
+} from "../../lib/ralph-state.js";
+import { registerRalplan } from "../../ralplan/index.js";
 
 export interface ModeOptions {
   mode: string;
@@ -38,6 +43,7 @@ export interface ModeOptions {
   silent?: boolean;
   interactive?: boolean;
   maxContinues?: number;
+  prdPath?: string;
 }
 
 // Modes that should run as a continuous loop (Copilot --autopilot keeps going
@@ -90,6 +96,18 @@ export function runMode(opts: ModeOptions): number {
       session_id: sessionId,
       started_at: new Date().toISOString(),
       prompt: opts.task,
+    });
+  }
+
+  // Ralph-specific: write ralph-state before spawning so the persistent-mode
+  // hook and skills can read iteration/prdPath on every Stop event.
+  if (opts.mode === "ralph") {
+    writeRalphState({
+      active: true,
+      iteration: 1,
+      lastFiredAt: new Date().toISOString(),
+      prompt: opts.task,
+      ...(opts.prdPath ? { prdPath: opts.prdPath } : {}),
     });
   }
 
@@ -146,6 +164,24 @@ export function runMode(opts: ModeOptions): number {
   if (isTrackedMode) {
     clearModeState(opts.mode as ModeName);
   }
+
+  // Ralph-specific: clear ralph-state after copilot exits.
+  if (opts.mode === "ralph") {
+    clearRalphState();
+  }
+
+  // Ralplan-specific: register boulder state after the skill completes so the
+  // omc-orchestrator hook and ralph can pick up the active plan.
+  if (opts.mode === "ralplan") {
+    registerRalplan({
+      task: opts.task,
+      planContent: "",
+      sessionId,
+      worktreeRoot: process.cwd(),
+      handOffToRalph: false,
+    });
+  }
+
   void fireNotification("session-end", {
     sessionId,
     projectPath: process.cwd(),
