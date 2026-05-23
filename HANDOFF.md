@@ -1,8 +1,59 @@
-# omcp 续接 handoff (post-v0.13.0 Phase 3)
+# omcp 续接 handoff (post-v0.13.0 Phase 4 — orchestrator-v1 complete)
 
-**Updated**: 2026-05-23 evening (Phase 3 complete — T1 ralph state-machine, T2 ralplan-boulder, T3 team-shard-merge, T4 invariants.md; Phase 5 verification protocol doc added)
+**Updated**: 2026-05-23 late-evening (Phase 4+5 complete; orchestrator-v1 fully shipped — phases 1, 1.5, 2, 3, 4, 5)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: `9c6fccb` docs(handoff): Phase 3 closure + Phase 4 critic-verify-loop priorities
+**Latest commit**: `fca6546` test(e2e): ralph loop PRD lifecycle integration test (Phase 4.T4)
+
+---
+
+## 2026-05-23 late-evening — Phase 4+5 complete; orchestrator-v1 fully shipped
+
+Phase 4 wired the critic-verify loop into the persistent-mode hook: `detectArchitectApproval`,
+`incrementRalphIteration` on every Stop, PRD `allComplete` → `noop` exit, and a full e2e
+integration test driving a 2-story PRD lifecycle. Phase 5 codified the team+critic verification
+protocol. All tasks T1–T4 + T5 are closed.
+
+### Phase 4 deliverables
+
+| Task | Status | Commit | Description |
+|---|---|---|---|
+| T1 — detectArchitectApproval wiring | ✓ | `b026438` | Scans Stop context text for `<architect-approved>VERIFIED_COMPLETE</architect-approved>`; clears ralph-state + returns COMPLETE advise on match |
+| T2 — incrementRalphIteration on Stop | ✓ | `e612847` | Hook calls `incrementRalphIteration(worktreeRoot)` before each advise; 3 new tests confirm counter advances |
+| T3 — PRD allComplete → noop exit | ✓ | `4924fb8` | `getPrdCompletionStatus().allComplete` → `noop` + clear state; architectApproved path also returns noop |
+| T4 — e2e ralph loop test | ✓ | `fca6546` | `src/__tests__/ralph-loop-e2e.test.ts`; 3 scenarios: 2-story lifecycle, early exit when complete, architect approval short-circuit |
+
+### Phase 5 deliverable
+
+| Task | Status | Commit | Description |
+|---|---|---|---|
+| T5 — team+critic verification protocol | ✓ | `1a4dc3a` | `docs/workflows/team-critic-verification.md`; 5-step protocol, pass condition, iterate/reject loop; 13 tests |
+
+**Tests: 889 (Phase 3 close) → 916 passing** (+27 net), 2 skipped, 0 failed.
+1 pre-existing Windows vitest worker-fork crash (unchanged since v0.4.0).
+tsc --noEmit: clean.
+
+### orchestrator-v1 closure summary
+
+The orchestrator-v1 plan (phases 1 → 1.5 → 2 → 3 → 4 → 5) is now fully shipped:
+
+| Phase | Commits | Key feature |
+|---|---|---|
+| Phase 1 | `4fb8cd1`, `6a2606e` | OMCP_HOOK_EVENTS 5→13; HookResult 3→6 variants; smoke verdict |
+| Phase 1.5 | `2dcf27d` | persistent-mode hook ported from omc (Stop event) |
+| Phase 2 | `7b00ada`, `b7a423b` | factcheck + sentinel-gate libs; preemptive-compaction hook |
+| Phase 3 | `2feb588`, `f8521bc`, `4a4b7bb` | ralph state-machine wiring; ralplan→boulder; team-shard-merge; invariants.md |
+| Phase 4 | `b026438`, `e612847`, `4924fb8`, `fca6546` | critic-verify loop: approval detection, iteration counter, allComplete exit, e2e test |
+| Phase 5 | `1a4dc3a` | team+critic verification protocol doc |
+
+### What the next session should do
+
+1. **Read this HANDOFF.md + `docs/workflows/team-critic-verification.md`** — the protocol that governs all future phase closures.
+2. **`git log -10` + `npm test`** to verify state: 916 passing, tsc clean, HEAD = `fca6546`.
+3. **Re-probe hooks** when Copilot CLI ships 1.0.53+ using `scripts/smoke/wire-probe-for-tui.mjs wire / exercise / check / unwire`.
+4. **Phase 3 follow-ups** (optional carry-over from Critic iter-1):
+   - `src/__tests__/cli-wiring-invariants.test.ts:155` — check all 4 manifests (currently checks 3)
+   - `src/cli/commands/session.ts:32` — retrofit `escapeRegExp` for the unescaped `new RegExp(query)`
+5. **Next major work**: Phase 6 (error-aggregator + auto-recovery-advisor — already shipped in v0.11.0, no action) or Phase 7 (modifiedArgs surgeon mode — needs TUI smoke PASS gate first).
 
 ---
 
@@ -34,28 +85,7 @@ The protocol runs after every phase: executor diff → fresh architect → fresh
 
 ---
 
-### Phase 4 — next session priorities
-
-Phase 4 is the **critic-verify loop** — wiring ralph to run until a critic/architect sign-off via `detectArchitectApproval`. Key tasks:
-
-1. **Critic hook integration**: the persistent-mode hook (Phase 2.T1, committed `2dcf27d`) already handles Stop events and reads ralph-state. What's missing: the ralph skill itself needs to emit `<architect-approved>VERIFIED_COMPLETE</architect-approved>` when its critic sub-agent confirms completion. Wire `detectArchitectApproval` from `src/lib/ralph-state.ts` into the persistent-mode hook's ralph check.
-
-2. **`incrementRalphIteration` on Stop**: The persistent-mode hook's ralph branch should call `incrementRalphIteration(worktreeRoot)` before returning `advise` so the loop counter advances each iteration. Currently it reads state but doesn't increment.
-
-3. **PRD allComplete exit**: When `getPrdCompletionStatus()` returns `allComplete: true`, the hook should return `noop` (not `advise`) so ralph exits cleanly. This prevents infinite loops after PRD completion.
-
-4. **E2e test**: Write an integration test that drives a tiny PRD through multiple iterations (write PRD, call `runMode({mode:"ralph"})` with mocked spawnSync that increments iteration each call, verify loop exits when PRD complete).
-
-5. **`omcp ralph --prd` smoke**: Manually verify that `omcp ralph --prd .omcp/prd.json "implement stories"` writes ralph-state with prdPath before handing off to copilot.
-
-### Context for Phase 4 agent
-
-- ralph state machine lives at `src/lib/ralph-state.ts` — all exports documented
-- persistent-mode hook at `src/hooks/persistent-mode/index.ts` — Stop event, reads ralph/ultrawork/todo state
-- `detectArchitectApproval` looks for `<architect-approved>VERIFIED_COMPLETE</architect-approved>` or `<ralph-approved ...>VERIFIED_COMPLETE</ralph-approved>` in stop context text
-- `getPrdCompletionStatus(worktreeRoot)` returns `{hasPrd, allComplete, status, nextStory}`
-- `incrementRalphIteration(worktreeRoot)` bumps iteration + refreshes lastFiredAt, returns updated state or null
-- The hook uses `ctx.cwd` directly as worktreeRoot (NOT `resolveToWorktreeRoot`) — established pattern from Phase 2
+### Phase 4 — COMPLETE (see top-of-file Phase 4 section)
 
 ---
 
