@@ -44,6 +44,7 @@ import {
   readState,
   writeState,
 } from "./commands/state.js";
+import { runStateRalph } from "./commands/state-ralph.js";
 import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam } from "./commands/team.js";
 import {
@@ -408,7 +409,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("state <action> [args...]")
-    .description("State CLI: list | read <mode> | write <mode> <json> | clear <mode> | clear-all")
+    .description("State CLI: list | read <mode> | write <mode> <json> | clear <mode> | clear-all | ralph <sub> | ultrawork <sub> | todo <sub> | boulder <sub>")
     .action((action: string, args: string[]) => {
       switch (action) {
         case "list":
@@ -439,8 +440,12 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           console.log(`omcp state clear-all: removed ${r.removed.length} file(s)`);
           return;
         }
+        case "ralph": {
+          process.exitCode = runStateRalph(args);
+          return;
+        }
         default:
-          console.error(`omcp state: unknown action '${action}' (list|read|write|clear|clear-all)`);
+          console.error(`omcp state: unknown action '${action}' (list|read|write|clear|clear-all|ralph|ultrawork|todo|boulder)`);
           process.exitCode = 2;
       }
     });
