@@ -152,7 +152,10 @@ describe("CLI wiring invariants", () => {
     expect(missing).toEqual([]);
   });
 
-  it("all three manifests have identical version", () => {
+  it("all four manifests have identical version", () => {
+    // The 4 version-carrier manifests (invariant 3). CHANGELOG.md is the
+    // release-note carrier and is not checked here — it does not have a
+    // machine-readable version field.
     const pkg = JSON.parse(
       readFileSync(join(ROOT, "package.json"), "utf8"),
     ) as { version: string };
@@ -162,10 +165,17 @@ describe("CLI wiring invariants", () => {
     const marketplace = JSON.parse(
       readFileSync(join(ROOT, ".agents", "plugins", "marketplace.json"), "utf8"),
     ) as { plugins: Array<{ version: string }> };
+    const pluginMirror = JSON.parse(
+      readFileSync(
+        join(ROOT, "plugins", "oh-my-copilot", ".claude-plugin", "plugin.json"),
+        "utf8",
+      ),
+    ) as { version: string };
     expect(plugin.version).toBe(pkg.version);
     for (const p of marketplace.plugins) {
       expect(p.version).toBe(pkg.version);
     }
+    expect(pluginMirror.version).toBe(pkg.version);
   });
 
   it("scripts/ ships omcp-hud.mjs and omcp-loop-watcher.mjs", () => {
