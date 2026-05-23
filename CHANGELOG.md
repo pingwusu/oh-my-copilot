@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-05-23
+
+### Added — Branch B of next-session-ralplan: state CLI verbs on top of N+1 lib subsystems
+
+Decided by the consensus-approved plan at `docs/plans/next-session-ralplan.md`.
+Branch was selected by the Step 1 probe: Copilot CLI 1.0.52-4 still has the
+upstream `SyntaxError: Unexpected token ':'` hook executor bug (same as 1.0.51),
+so Phase 2 Batch C N+2 (the 3 deferred hook ports) remains BLOCKED-UPSTREAM.
+Branch B ships user-facing CLI surfaces on top of the N+1 lib subsystems that
+do NOT depend on hook firing.
+
+- `src/runtime/escape-regexp.ts` (US-B0) — invariant-9 utility that escapes
+  the 14 regex metachars per MDN. Tiny pure function, 5 tests.
+- `omcp state ralph` (US-B1) — `status / start <task> / iterate / clear`,
+  delegating to `src/lib/ralph-state.ts`. 11 tests.
+- `omcp state ultrawork` (US-B2) — `status / start <prompt> / clear`,
+  delegating to `src/lib/ultrawork-state.ts`. 7 tests.
+- `omcp state todo` (US-B3) — `add <title> / update <id> <status> /
+  list [--filter <pattern>] / clear`. `--filter` runs through `escapeRegExp`
+  before compilation so a `.` in the filter matches a literal dot, not "any
+  char". 12 tests including the regex-escape proof.
+- `omcp state boulder` (US-B4) — `status / list-plans / clear`,
+  delegating to `src/lib/boulder-state.ts`. 8 tests.
+
+Nesting: all four sub-actions hang off the existing `omcp state` Commander
+command as new switch cases — they do NOT introduce top-level `omcp ralph`
+or `omcp ultrawork` verbs, which already exist as mode launchers via
+`MODE_COMMANDS` (`src/cli/omcp.ts:64-85`). The `omcp state` description
+string is updated to advertise the new sub-actions.
+
+Test count: 699 → 743 passing (+44 net), 0 failed, 2 skipped, Windows
+worker-fork EPERM baseline unchanged (hardened in this release via
+`doctor-team-routing.test.ts` teardown try/catch matching the
+`atomic-write.test.ts` pattern).
+
+### Probe data point (Copilot CLI 1.0.52-4, 2026-05-23)
+
+`scripts/smoke/wire-probe-for-tui.mjs` exercised against the new Copilot
+CLI release shipped between v0.11.0 and v0.12.0. Verdict: same
+`SyntaxError: Unexpected token ':'` at `node:internal/vm:194:14` —
+upstream bug NOT fixed. Reproduction kept under
+`~/.copilot/logs/process-*.log` for the next investigation. Re-test
+trigger: user upgrades Copilot CLI past 1.0.52-4.
+
+### Carried forward
+
+- All N+1 lib subsystems (worktree-paths, ralph-state, ultrawork-state,
+  todo-state, boulder-state, notepad-state) — unchanged.
+- All Phase 5 + Phase 6 hooks (cost-governor, loop-detector,
+  audit-logger, error-aggregator, auto-recovery-advisor,
+  notification-dispatcher, idle-alert) — unchanged.
+- Phase 4 hallucination-shield `advise-only` downgrade — unchanged
+  (re-evaluation deferred to whichever session closes the hook question).
+
 ## [0.11.0] — 2026-05-22
 
 ### Added — Phase 5 + Phase 6 hooks from hooks-parity v3 plan
