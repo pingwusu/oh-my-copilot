@@ -49,7 +49,7 @@ import { runStateBoulder } from "./commands/state-boulder.js";
 import { runStateTodo } from "./commands/state-todo.js";
 import { runStateUltrawork } from "./commands/state-ultrawork.js";
 import { formatStatus, readStatus } from "./commands/status.js";
-import { parseTeamSpec, runTeam, runTeamMergeShards } from "./commands/team.js";
+import { parseTeamSpec, runTeam, runTeamMergeShards, runTeamWatchdog } from "./commands/team.js";
 import {
   formatTeleportList,
   listTeleports,
@@ -268,6 +268,31 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       console.log(`  shards merged:  ${r.shardsProcessed}`);
       console.log(`  stories updated:${r.storiesUpdated}`);
       console.log(`  conflicts:      ${r.conflicts.length}`);
+    });
+
+  program
+    .command("team-watch <session-id>")
+    .description("Detect stuck workers in a team session and write reassign markers")
+    .option(
+      "--timeout <ms>",
+      "stuck threshold in ms (default: OMCP_TEAM_WATCHDOG_TIMEOUT_MS or 600000)",
+      (v) => Number(v),
+    )
+    .action((sessionId: string, opts: { timeout?: number }) => {
+      const timeoutMs =
+        opts.timeout ??
+        (Number(process.env.OMCP_TEAM_WATCHDOG_TIMEOUT_MS ?? "0") || undefined);
+      const report = runTeamWatchdog({ sessionId, timeoutMs });
+      console.log(`omcp team-watch: session=${report.sessionId}`);
+      console.log(`  workers checked: ${report.workers.length}`);
+      const stuck = report.workers.filter((w) => w.stuck);
+      const dead = report.workers.filter((w) => w.dead);
+      console.log(`  stuck:           ${stuck.length}`);
+      console.log(`  dead (skipped):  ${dead.length}`);
+      for (const line of report.logLines) {
+        console.warn(line);
+      }
+      process.exitCode = stuck.length > 0 ? 1 : 0;
     });
 
   // ralph gets an extra --prd option for PRD-driven execution.

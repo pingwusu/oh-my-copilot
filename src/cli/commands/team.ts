@@ -17,6 +17,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -325,6 +326,154 @@ export function runTeamMergeShards(
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+// ─── stuck-worker watchdog ────────────────────────────────────────────────────
+
+export interface WatchdogWorkerResult {
+  index: number;
+  pid: number;
+  stuck: boolean;
+  /** true when pid is no longer alive — skipped, no warning emitted */
+  dead: boolean;
+  /** mtime of the shard-write file, or undefined when no shard file present */
+  shardMtimeMs?: number;
+  markerWritten: boolean;
+}
+
+export interface WatchdogReport {
+  sessionId: string;
+  workers: WatchdogWorkerResult[];
+  /** Log lines emitted (for test inspection). */
+  logLines: string[];
+}
+
+/**
+ * Scan workers for the given session and flag any whose last shard-write mtime
+ * exceeds `timeoutMs` (default: OMCP_TEAM_WATCHDOG_TIMEOUT_MS or 600000 ms).
+ *
+ * For each stuck + alive worker:
+ *  - Logs a warning to `logLines` (and to `console.warn`).
+ *  - Writes `.omcp/state/team/<sessionId>/worker-K-reassign-needed.json`.
+ *
+ * Dead workers (pid no longer alive) are skipped silently.
+ * Actual reassignment orchestration is OUT OF SCOPE — this phase implements
+ * detection, logging, and marker write only.
+ *
+ * @param opts.sessionId   The team session to watch.
+ * @param opts.timeoutMs   Stuck threshold in ms (overrides env var).
+ * @param opts.now         Test hook: override Date.now().
+ * @param opts.silent      When true, suppress console.warn output.
+ */
+export function runTeamWatchdog(opts: {
+  sessionId: string;
+  timeoutMs?: number;
+  now?: () => number;
+  silent?: boolean;
+  /** Test hook: override the working directory used to resolve the pidDir. */
+  cwd?: string;
+}): WatchdogReport {
+  const timeoutMs =
+    opts.timeoutMs ??
+    (Number(process.env.OMCP_TEAM_WATCHDOG_TIMEOUT_MS ?? "600000") || 600000);
+  const now = opts.now ?? (() => Date.now());
+
+  const pidDir = join(opts.cwd ?? process.cwd(), ".omcp", "state", "team", opts.sessionId);
+  const workers: WatchdogWorkerResult[] = [];
+  const logLines: string[] = [];
+
+  if (!existsSync(pidDir)) {
+    return { sessionId: opts.sessionId, workers, logLines };
+  }
+
+  for (const f of readdirSync(pidDir)) {
+    const m = /^worker-(\d+)\.pid$/.exec(f);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    const pidPath = join(pidDir, f);
+
+    let pid: number;
+    try {
+      pid = Number(readFileSync(pidPath, "utf8").trim());
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+    } catch {
+      continue;
+    }
+
+    // Check if the process is alive.
+    let alive = false;
+    try {
+      process.kill(pid, 0);
+      alive = true;
+    } catch {
+      alive = false;
+    }
+
+    if (!alive) {
+      workers.push({ index: idx, pid, stuck: false, dead: true, markerWritten: false });
+      continue;
+    }
+
+    // Check shard-write mtime for staleness.
+    // Shard file is worker-K-shard.json under the pidDir (written by the worker
+    // to report incremental task completion).
+    const shardFile = join(pidDir, `worker-${idx}-shard.json`);
+    let shardMtimeMs: number | undefined;
+    let stuck = false;
+
+    if (existsSync(shardFile)) {
+      try {
+        shardMtimeMs = statSync(shardFile).mtimeMs;
+        stuck = now() - shardMtimeMs > timeoutMs;
+      } catch {
+        // Can't stat — treat as not stuck.
+      }
+    } else {
+      // No shard file yet: use pidfile mtime as proxy for "last activity".
+      try {
+        const pidMtime = statSync(pidPath).mtimeMs;
+        stuck = now() - pidMtime > timeoutMs;
+        shardMtimeMs = pidMtime;
+      } catch {
+        // Can't stat pidfile — skip.
+        workers.push({ index: idx, pid, stuck: false, dead: false, markerWritten: false });
+        continue;
+      }
+    }
+
+    let markerWritten = false;
+    if (stuck) {
+      const msg = `[omcp watchdog] worker-${idx} (pid=${pid}) stuck for >${timeoutMs}ms — reassign needed`;
+      logLines.push(msg);
+      if (!opts.silent) {
+        console.warn(msg);
+      }
+      const markerFile = join(pidDir, `worker-${idx}-reassign-needed.json`);
+      try {
+        atomicWriteFileSync(
+          markerFile,
+          JSON.stringify(
+            {
+              worker: idx,
+              pid,
+              detected_at: new Date().toISOString(),
+              shard_mtime_ms: shardMtimeMs,
+              timeout_ms: timeoutMs,
+            },
+            null,
+            2,
+          ),
+        );
+        markerWritten = true;
+      } catch {
+        // Non-fatal: watchdog marker write failure should not crash the caller.
+      }
+    }
+
+    workers.push({ index: idx, pid, stuck, dead: false, shardMtimeMs, markerWritten });
+  }
+
+  return { sessionId: opts.sessionId, workers, logLines };
 }
 
 // DD8: short busy-poll for process termination. Bounded by deadlineMs.
