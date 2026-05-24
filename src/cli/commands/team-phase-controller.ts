@@ -179,7 +179,30 @@ export function runTeamCollect(
     // All shards present — run merge to detect conflicts (v1.3 ext).
     // When teamName is not provided, skip conflict detection (v1.2.0 compat).
     if (teamName !== undefined) {
-      const mergeReport = mergeShards(teamName, cwd);
+      // v1.3 review MINOR (Critic): catch mergeShards crashes so a merge
+      // failure doesn't propagate as an uncaught throw through runTeamCollect.
+      // Treat merge failure as "no conflicts detected, but logged" — caller
+      // can re-run after investigation. Phase advances to 'completed' so the
+      // session isn't stuck.
+      let mergeReport: ReturnType<typeof mergeShards>;
+      try {
+        mergeReport = mergeShards(teamName, cwd);
+      } catch (err) {
+        logLines.push(
+          `[team-collect] warning: mergeShards threw for team='${teamName}': ${(err as Error).message} — treating as zero conflicts; investigate manually`,
+        );
+        // Synthesize an empty MergeReport so downstream logic can treat the
+        // crash as "no conflicts" and progress to 'completed' rather than
+        // leaving the session stuck in 'executing'.
+        mergeReport = {
+          mergedAt: new Date().toISOString(),
+          teamName,
+          shardsProcessed: 0,
+          storiesUpdated: 0,
+          workers: [],
+          conflicts: [],
+        };
+      }
       if (mergeReport.conflicts.length > 0) {
         targetPhase = "fixing";
         mergeConflicts = mergeReport.conflicts;

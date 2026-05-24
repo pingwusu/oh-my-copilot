@@ -309,24 +309,38 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   program
     .command("team-collect <session-id>")
     .description(
-      "Inspect worker shards + pidfile health and transition team phase to completed/failed",
+      "Inspect worker shards + pidfile health and transition team phase to completed/failed (or fixing when --team-name passed and merge conflicts detected)",
     )
-    .action((sessionId: string) => {
-      const report = runTeamCollect(sessionId);
+    .option(
+      "--team-name <name>",
+      "team slug to drive shard-merge conflict detection (when omitted, transitions skip the conflict check — v1.2 back-compat)",
+    )
+    .action((sessionId: string, opts: { teamName?: string }) => {
+      const report = runTeamCollect(sessionId, { teamName: opts.teamName });
       console.log(`omcp team-collect: session=${report.sessionId}`);
       console.log(`  finalPhase:         ${report.finalPhase}`);
       console.log(`  workers checked:    ${report.workers.length}`);
       console.log(`  allShardsPresent:   ${report.allShardsPresent}`);
       console.log(`  hasDeadWithoutShard:${report.hasDeadWithoutShard}`);
+      if (report.mergeConflicts && report.mergeConflicts.length > 0) {
+        console.log(`  mergeConflicts:     ${report.mergeConflicts.length}`);
+      }
       for (const line of report.logLines) {
         console.log(line);
       }
+      // Exit-code mapping:
+      //   completed -> 0  (clean success)
+      //   failed    -> 1  (worker died, no shard)
+      //   fixing    -> 2  (merge conflicts; needs manual / future-bot resolution)
+      //   other     -> 0
       process.exitCode =
         report.finalPhase === "completed"
           ? 0
           : report.finalPhase === "failed"
             ? 1
-            : 0;
+            : report.finalPhase === "fixing"
+              ? 2
+              : 0;
     });
 
   // ralph gets extra --prd and --resume options.
