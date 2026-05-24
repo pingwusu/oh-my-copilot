@@ -249,14 +249,11 @@ export function runMode(opts: ModeOptions): number {
     // One-shot modes don't get --autopilot.
   }
 
-  // Ralph-specific: snapshot ralph-state and PRD status BEFORE clearModeState
-  // wipes .omcp/state/ralph-state.json (mode-state and ralph-state share the
-  // same file — clearModeState("ralph") would otherwise erase ralph-state).
-  // We capture what we need here, then restore if we should preserve state.
-  const ralphSnapshot =
+  // Ralph-specific: capture a pre-spawn snapshot for crash-recovery on
+  // non-zero exit only. Do NOT use this for the shouldClear decision on
+  // clean exit — the PRD status must be re-read POST-spawn (Fix A, v1.4 RCA).
+  const preSpawnRalphSnapshot =
     opts.mode === "ralph" ? readRalphState() : null;
-  const prdStatusSnapshot =
-    opts.mode === "ralph" ? getPrdCompletionStatus() : null;
 
   const result = spawnSyncCrossPlatform("copilot", args, {
     stdio: "inherit",
@@ -271,16 +268,17 @@ export function runMode(opts: ModeOptions): number {
   //
   // Only clear if BOTH conditions hold:
   //   (a) copilot exited with status 0, AND
-  //   (b) either the PRD reports allComplete===true, OR ralph state already
-  //       has architectApproved===true from a prior iteration.
+  //   (b) either the PRD reports allComplete===true (re-read POST-spawn so we
+  //       see work Copilot completed during the run), OR ralph state already
+  //       has architectApproved===true.
   //
   // Any other exit (non-zero, or zero-but-incomplete-PRD, or no PRD and no
   // architect approval) preserves the state so a subsequent `omcp ralph`
   // can resume from where it left off (crash/SIGINT/OOM recovery).
   //
   // NOTE: clearModeState("ralph") above deletes the same file as ralph-state
-  // (both use .omcp/state/ralph-state.json). We captured the pre-exit snapshot
-  // above and restore it here when preservation is required.
+  // (both use .omcp/state/ralph-state.json). We re-read post-spawn state
+  // to get the correct file content after Copilot may have updated it.
   //
   // NOTE: src/hooks/persistent-mode/index.ts also calls clearRalphState at
   // three specific conditional points:
@@ -288,22 +286,35 @@ export function runMode(opts: ModeOptions): number {
   //   - line 133:     architectApproved was already set in a prior iteration
   //   - line 143:     allComplete branch (PRD fully done)
   // Those call sites are the CORRECT conditional paths and must NOT be
-  // modified. Only the unconditional call here (mode.ts) is the bug being
-  // fixed in Phase L3.3.
-  if (opts.mode === "ralph" && ralphSnapshot) {
+  // modified. Only the snapshot-timing bug here (mode.ts) is fixed in v1.4.
+  if (opts.mode === "ralph") {
     const ralphExitCode = result.status ?? 1;
-    if (ralphExitCode === 0) {
+    if (ralphExitCode !== 0) {
+      // Non-zero exit (crash/SIGINT/OOM): restore pre-spawn snapshot so the
+      // user can resume from where the iteration started.
+      if (preSpawnRalphSnapshot) {
+        writeRalphState(preSpawnRalphSnapshot);
+      }
+    } else {
+      // Clean exit: re-read POST-spawn PRD status and ralph-state so we see
+      // any work Copilot completed during the run (Fix A — never use the
+      // pre-spawn prdStatusSnapshot for this decision).
+      const postRunPrd = getPrdCompletionStatus();
+      const postRunRalph = readRalphState();
       const shouldClear =
-        (prdStatusSnapshot?.allComplete ?? false) ||
-        ralphSnapshot.architectApproved === true;
+        postRunPrd.allComplete ||
+        (postRunRalph?.architectApproved === true) ||
+        (preSpawnRalphSnapshot?.architectApproved === true);
       if (!shouldClear) {
-        // Restore ralph-state that was wiped by clearModeState above.
-        writeRalphState(ralphSnapshot);
+        // PRD not complete and no architect approval: preserve state for
+        // resume. If clearModeState deleted the file, restore post-run state
+        // (preferred) or fall back to pre-spawn snapshot.
+        const stateToRestore = postRunRalph ?? preSpawnRalphSnapshot;
+        if (stateToRestore) {
+          writeRalphState(stateToRestore);
+        }
       }
       // else: clearModeState already removed the file — done.
-    } else {
-      // Non-zero exit — restore ralph-state for crash recovery resume.
-      writeRalphState(ralphSnapshot);
     }
   }
 
