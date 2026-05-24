@@ -18,7 +18,51 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+
+/**
+ * Locate npm's actual JS entry point (npm-cli.js) on disk, so we can
+ * invoke it directly via `node <npm-cli.js>` instead of via the `.cmd`
+ * shim that requires `shell: true` (Node 24's DEP0190 deprecation
+ * warning trigger). Pure path derivation from process.execPath — NO
+ * subprocess calls (calling `npm config get prefix` would itself need
+ * shell:true on Windows and re-trigger DEP0190).
+ *
+ * Layouts verified:
+ *   - Windows installer:  <execPath_dir>/node_modules/npm/bin/npm-cli.js
+ *   - nvm-windows, volta, fnm: same as standard installer (relative
+ *     to the active node.exe)
+ *   - POSIX:              <dirname(dirname(execPath))>/lib/node_modules/
+ *                         npm/bin/npm-cli.js
+ *
+ * Returns the absolute path if found, or `null` so callers fall back
+ * to the shell:true legacy form.
+ */
+function findNpmCliJs(): string | null {
+  // Windows + Windows-shaped Node installs (nvm-windows, volta, fnm).
+  const winCandidate = join(
+    dirname(process.execPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  if (existsSync(winCandidate)) return winCandidate;
+
+  // POSIX (Linux/macOS): node lives in `<prefix>/bin/`, npm-cli.js in
+  // `<prefix>/lib/node_modules/npm/bin/`.
+  const posixCandidate = join(
+    dirname(dirname(process.execPath)),
+    "lib",
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  if (existsSync(posixCandidate)) return posixCandidate;
+
+  return null;
+}
 import {
   applyOmcpConfigWiring,
   applyOmcpHookWiring,
@@ -143,11 +187,6 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
       // faster than `install` for re-runs. First-time setup has no
       // lockfile → fall back to `install` which creates one for the
       // next run.
-      //
-      // True dev-version pinning (shipping a curated lockfile with the
-      // omcp npm package) is a separate concern tracked as v1.8 work;
-      // current behavior pins WITHIN a user's install across re-runs
-      // but does not pin to the version omcp's authors tested with.
       const lockPath = join(paths.omcpPluginDir, "package-lock.json");
       const useCi = existsSync(lockPath);
       const npmArgs = useCi
@@ -161,16 +200,24 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
             "--no-fund",
           ];
 
-      // `shell: process.platform === "win32"` is required so Node can find
-      // npm's `.cmd` shim via PATHEXT on Windows. Node 24 emits DEP0190
-      // (shell:true concatenates args, theoretical injection vector) — our
-      // args are static so the warning is a known false positive. v1.7
-      // multi-direction follow-up tracked in roadmap.
-      const result = spawnSync("npm", npmArgs, {
-        cwd: paths.omcpPluginDir,
-        stdio: "inherit",
-        shell: process.platform === "win32",
-      });
+      // v1.7 US-03 Direction B: invoke npm via `node <npm-cli.js>` to
+      // bypass the .cmd shim entirely. This avoids `shell: true` on
+      // Windows (which would trigger Node 24's DEP0190 deprecation
+      // warning). Falls back to the shell:true legacy form when
+      // npm-cli.js cannot be located (e.g. exotic install layouts).
+      // Probe report: docs/probes/dep0190-direction-b-node-npm-cli.md.
+      const npmCliJs = findNpmCliJs();
+      const result = npmCliJs
+        ? spawnSync(process.execPath, [npmCliJs, ...npmArgs], {
+            cwd: paths.omcpPluginDir,
+            stdio: "inherit",
+            // No shell — calling node directly with absolute script path.
+          })
+        : spawnSync("npm", npmArgs, {
+            cwd: paths.omcpPluginDir,
+            stdio: "inherit",
+            shell: process.platform === "win32",
+          });
       if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(
           `npm not found on PATH. Install Node.js (https://nodejs.org) or run ` +

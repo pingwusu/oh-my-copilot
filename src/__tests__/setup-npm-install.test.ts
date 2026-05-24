@@ -112,7 +112,7 @@ describe("setup writes minimal runtime package.json + runs npm install (v1.5)", 
     expect(report.depsInstallSkipped).toBe(false);
   });
 
-  it("test 2: first-time install (no lockfile) invokes `npm install` with correct args + cwd + windows-shell guard", async () => {
+  it("test 2: first-time install (no lockfile) invokes `node <npm-cli.js> install` (v1.7 US-03 Direction B)", async () => {
     await runSetup({ packageRoot: PACKAGE_ROOT });
 
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
@@ -121,22 +121,42 @@ describe("setup writes minimal runtime package.json + runs npm install (v1.5)", 
       string[],
       Record<string, unknown>,
     ];
-    expect(cmd).toBe("npm");
-    expect(args).toEqual([
-      "install",
-      "--omit=dev",
-      "--ignore-scripts",
-      "--prefer-offline",
-      "--no-audit",
-      "--no-fund",
-    ]);
+    // v1.7 US-03 Direction B: spawn cmd is process.execPath (node),
+    // args[0] is npm-cli.js absolute path, args[1..] are npm sub-args.
+    // Falls back to "npm" + shell:true if findNpmCliJs() returned null
+    // (exotic install layouts).
+    if (cmd === process.execPath) {
+      // Direction B path: node + npm-cli.js
+      expect(args[0]).toMatch(/npm-cli\.js$/);
+      expect(args.slice(1)).toEqual([
+        "install",
+        "--omit=dev",
+        "--ignore-scripts",
+        "--prefer-offline",
+        "--no-audit",
+        "--no-fund",
+      ]);
+      // No shell — calling node directly.
+      expect(options.shell).toBeUndefined();
+    } else {
+      // Legacy fallback: spawn("npm", [...], { shell: win32 })
+      expect(cmd).toBe("npm");
+      expect(args).toEqual([
+        "install",
+        "--omit=dev",
+        "--ignore-scripts",
+        "--prefer-offline",
+        "--no-audit",
+        "--no-fund",
+      ]);
+      expect(options.shell).toBe(process.platform === "win32");
+    }
     expect(options.cwd).toBe(
       join(tmp, "installed-plugins", "oh-my-copilot", "oh-my-copilot"),
     );
-    expect(options.shell).toBe(process.platform === "win32");
   });
 
-  it("test 2b (v1.7 US-04): existing lockfile triggers `npm ci` for reproducibility", async () => {
+  it("test 2b (v1.7 US-04): existing lockfile triggers `ci` instead of `install`", async () => {
     // Pre-create a fake lockfile at the plugin install dir so setup
     // sees existsSync(lockfile) === true and switches to npm ci.
     const pluginDir = join(tmp, "installed-plugins", "oh-my-copilot", "oh-my-copilot");
@@ -145,14 +165,15 @@ describe("setup writes minimal runtime package.json + runs npm install (v1.5)", 
 
     await runSetup({ packageRoot: PACKAGE_ROOT });
 
-    // setup may call spawn more than once if a re-entry happens; we
-    // want the FIRST call to be ci. Inspect what was invoked.
-    const [_cmd, args] = spawnSyncMock.mock.calls[0] as [
+    const [cmd, args] = spawnSyncMock.mock.calls[0] as [
       string,
       string[],
       Record<string, unknown>,
     ];
-    expect(args[0]).toBe("ci");
+    // Branch depends on findNpmCliJs result. Either way, the npm verb
+    // (install vs ci) is what we're testing.
+    const npmVerbIdx = cmd === process.execPath ? 1 : 0;
+    expect(args[npmVerbIdx]).toBe("ci");
     expect(args).toContain("--omit=dev");
     expect(args).toContain("--ignore-scripts");
     // --prefer-offline is install-only; ci pulls from lockfile.
