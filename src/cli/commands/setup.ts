@@ -10,7 +10,14 @@
 //   6. write hook entries to ~/.copilot/settings.json (Copilot reads hooks from there)
 //   7. merge MCP servers into ~/.copilot/mcp-config.json with PLUGIN_ROOT substitution
 
-import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   applyOmcpConfigWiring,
@@ -34,7 +41,7 @@ import { resolvePaths } from "../../runtime/paths.js";
 // Kept in sync with src/scripts/sync-plugin-mirror.ts:DIR_SOURCES; an invariant
 // test in src/__tests__/cli-wiring-invariants.test.ts enforces parity so the
 // two arrays can never silently desync again (DD3-A regression).
-const SOURCE_ROOTS = [
+export const SOURCE_ROOTS = [
   "agents",
   "skills",
   "prompts",
@@ -45,12 +52,23 @@ const SOURCE_ROOTS = [
   ".claude-plugin",
 ];
 
-const SOURCE_FILES = [".mcp.json", "AGENTS.md", "CLAUDE.md", "README.md"];
+export const SOURCE_FILES = [
+  ".mcp.json",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "README.md",
+];
 
 export interface SetupOptions {
   force?: boolean;
   dryRun?: boolean;
   packageRoot: string;
+  /**
+   * Skip the `npm install` step in the plugin install dir. Used by tests/CI
+   * where running a real npm install would touch network or take time.
+   * Production callers (the `omcp setup` CLI verb) should leave this false.
+   */
+  skipDepsInstall?: boolean;
 }
 
 export interface SetupReport {
@@ -61,6 +79,10 @@ export interface SetupReport {
   hooksWired: boolean;
   statusLineWired: boolean;
   dryRun: boolean;
+  /** True when `npm install` actually ran (and succeeded) in the plugin dir. */
+  depsInstalled: boolean;
+  /** True when the npm install step was skipped (dryRun or skipDepsInstall). */
+  depsInstallSkipped: boolean;
 }
 
 export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
@@ -73,8 +95,12 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
   );
   const pkg = JSON.parse(
     readFileSync(join(packageRoot, "package.json"), "utf8"),
-  ) as { version: string };
+  ) as { version: string; dependencies?: Record<string, string> };
   const version = pkg.version;
+  const sourceDependencies = pkg.dependencies ?? {};
+  const skipDepsInstall = opts.skipDepsInstall ?? false;
+  let depsInstalled = false;
+  let depsInstallSkipped = Boolean(dryRun) || skipDepsInstall;
 
   if (!dryRun) {
     mkdirSync(paths.omcpPluginDir, { recursive: true });
@@ -87,6 +113,60 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
       const src = join(packageRoot, file);
       if (!existsSync(src)) continue;
       cpSync(src, join(paths.omcpPluginDir, file), { force: true });
+    }
+
+    // v1.5 fix: write a minimal runtime package.json so MCP servers can
+    // resolve bare ESM specifiers (@modelcontextprotocol/sdk etc.) when
+    // Copilot launches them from the plugin install dir. Then run
+    // `npm install` to materialize node_modules at that path.
+    //
+    // We deliberately do NOT copy the source package.json verbatim — it
+    // carries devDependencies, scripts (incl. postinstall), and bin
+    // entries that have no business at the install path.
+    const runtimePkg = {
+      name: "oh-my-copilot-plugin-runtime",
+      version,
+      type: "module" as const,
+      private: true,
+      dependencies: sourceDependencies,
+    };
+    writeFileSync(
+      join(paths.omcpPluginDir, "package.json"),
+      `${JSON.stringify(runtimePkg, null, 2)}\n`,
+      "utf8",
+    );
+
+    if (!skipDepsInstall) {
+      const result = spawnSync(
+        "npm",
+        [
+          "install",
+          "--omit=dev",
+          "--ignore-scripts",
+          "--prefer-offline",
+          "--no-audit",
+          "--no-fund",
+        ],
+        {
+          cwd: paths.omcpPluginDir,
+          stdio: "inherit",
+          shell: process.platform === "win32",
+        },
+      );
+      if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `npm not found on PATH. Install Node.js (https://nodejs.org) or run ` +
+            `"npm install --omit=dev" manually in ${paths.omcpPluginDir}.`,
+        );
+      }
+      if (result.status !== 0) {
+        throw new Error(
+          `npm install failed (exit ${result.status ?? "unknown"}) in ` +
+            `${paths.omcpPluginDir}. Check network connectivity and that ` +
+            `node_modules is writable. Re-run \`omcp setup\` after resolving.`,
+        );
+      }
+      depsInstalled = true;
     }
   }
 
@@ -143,5 +223,7 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
     hooksWired,
     statusLineWired,
     dryRun: Boolean(dryRun),
+    depsInstalled,
+    depsInstallSkipped,
   };
 }

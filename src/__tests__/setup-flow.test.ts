@@ -21,7 +21,7 @@ describe("runSetup", () => {
 
   it("installs plugin, marketplace, config, and MCP merge", async () => {
     const packageRoot = join(__dirname, "..", "..");
-    const report = await runSetup({ packageRoot });
+    const report = await runSetup({ packageRoot, skipDepsInstall: true });
 
     expect(report.dryRun).toBe(false);
     expect(report.pluginInstalledAt).toContain("oh-my-copilot");
@@ -69,7 +69,7 @@ describe("runSetup", () => {
 
   it("dry-run writes nothing", async () => {
     const packageRoot = join(__dirname, "..", "..");
-    await runSetup({ packageRoot, dryRun: true });
+    await runSetup({ packageRoot, dryRun: true, skipDepsInstall: true });
     expect(existsSync(join(tmp, "config.json"))).toBe(false);
     expect(existsSync(join(tmp, "marketplaces", "oh-my-copilot.json"))).toBe(false);
   });
@@ -77,7 +77,7 @@ describe("runSetup", () => {
   it("re-running setup preserves user-authored hook entries", async () => {
     const packageRoot = join(__dirname, "..", "..");
     // 1. First setup writes omcp wiring to settings.json.
-    await runSetup({ packageRoot });
+    await runSetup({ packageRoot, skipDepsInstall: true });
     // 2. User edits settings.json to add a custom hook.
     const settingsPath = join(tmp, "settings.json");
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
@@ -87,7 +87,7 @@ describe("runSetup", () => {
     });
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     // 3. Re-run setup — user entry must survive.
-    const report2 = await runSetup({ packageRoot });
+    const report2 = await runSetup({ packageRoot, skipDepsInstall: true });
     const settings2 = JSON.parse(readFileSync(settingsPath, "utf8"));
     expect(report2.hooksWired).toBe(true);
     const userMatcher = settings2.hooks.PreToolUse.find(
