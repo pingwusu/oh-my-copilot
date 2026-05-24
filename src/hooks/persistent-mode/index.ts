@@ -65,7 +65,15 @@ const todoContinuationAttempts = new Map<string, number>();
 // ---------------------------------------------------------------------------
 
 function extractStopContext(ctx: HookContext): StopContext {
-  const raw = (ctx.toolArgs ?? ctx.toolResult ?? {}) as Record<string, unknown>;
+  // Copilot emits Stop-event fields directly on the stdin payload root
+  // (`stop_reason`, `transcript_path`, `hook_event_name`, ...). Older host
+  // CLIs surface info via `toolArgs`/`toolResult`. Prefer the raw payload
+  // when present so we see Copilot's snake_case fields; fall back to the
+  // legacy tool-args/result locations for compatibility.
+  const raw = (ctx.payload ?? ctx.toolArgs ?? ctx.toolResult ?? {}) as Record<
+    string,
+    unknown
+  >;
   return {
     stop_reason: raw.stop_reason as string | undefined,
     stopReason: raw.stopReason as string | undefined,

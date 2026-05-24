@@ -443,14 +443,25 @@ export async function runFireCli(opts: RunFireCliOpts): Promise<number> {
   const event = opts.event as HookEvent;
   const stdinPayload = await readStdinJson();
   const cwd = opts.cwd ?? process.cwd();
+  // Copilot's vsCodeCompat path emits snake_case fields (session_id, cwd,
+  // stop_reason, transcript_path, ...). The camelCase fallback path emits
+  // sessionId, transcriptPath, etc. We accept either form so omcp works
+  // regardless of which serializer Copilot picks for a given event.
+  const rawPayload = stdinPayload as Record<string, unknown>;
+  const sessionIdFromPayload =
+    typeof rawPayload.sessionId === "string"
+      ? rawPayload.sessionId
+      : typeof rawPayload.session_id === "string"
+        ? rawPayload.session_id
+        : "";
   const ctx: Omit<HookContext, "event"> = {
-    sessionId:
-      typeof stdinPayload.sessionId === "string" ? stdinPayload.sessionId : "",
+    sessionId: sessionIdFromPayload,
     cwd: typeof stdinPayload.cwd === "string" ? stdinPayload.cwd : cwd,
     toolName:
       typeof stdinPayload.toolName === "string" ? stdinPayload.toolName : undefined,
     toolArgs: stdinPayload.toolArgs,
     toolResult: stdinPayload.toolResult,
+    payload: rawPayload,
   };
   const entries = await fireHooks(event, ctx, opts.loadOptions ?? { env: opts.env, cwd });
   if (opts.json) {

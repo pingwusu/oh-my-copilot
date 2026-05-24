@@ -34,6 +34,14 @@ export interface HookContext {
   toolResult?: unknown;
   sessionId: string;
   cwd: string;
+  /**
+   * Raw stdin JSON payload from Copilot, preserved as-emitted. Used by hooks
+   * that need event-specific fields not directly mapped onto HookContext —
+   * e.g. Stop's `stop_reason` / `transcript_path` (snake_case) which Copilot
+   * emits via the vsCodeCompat path. Field-name conventions vary by event
+   * and Copilot version; hooks should tolerate both snake_case and camelCase.
+   */
+  payload?: Record<string, unknown>;
 }
 
 /**
