@@ -1,15 +1,64 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-24 night (v1.4.0 cut — housekeeping RCA closure + Copilot Stop-payload hardening + canonical --yolo + Lane 3 disputed-doc cleanup)
+**Updated**: 2026-05-24 late-night (v1.5.0 cut — MCP plugin-install deps fix + upstream pwsh dispatch bug detection)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z v1.4.0 release commit
-**Version**: **v1.4.0** (RCA + Stop-payload hardening + canonical --yolo; cut this session atop v1.3.0)
-**Tests**: 1133 passing, 0 failed, 2 skipped (+35 from v1.3.0 baseline 1098, +154 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
+**Latest commit**: see `git log -1` — Phase Z v1.5.0 release commit
+**Version**: **v1.5.0** (MCP deps + doctor pwsh detection; cut this session atop v1.4.0)
+**Tests**: 1156 passing, 0 failed, 2 skipped (+23 from v1.4.0 baseline 1133, +177 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
 
 ---
 
-## v1.4.0 deliverables (this session)
+## v1.5.0 deliverables (this session)
+
+5 commits atop v1.4.0:
+
+| Commit | Phase | Title |
+|---|---|---|
+| `6d4590b` | docs | docs(smoke): v1.4 iteration live smoke + v1.5 input evidence |
+| `3572efa` | fix | fix(setup): write minimal runtime package.json + npm install MCP deps in plugin install dir |
+| `91b36ce` | feat | feat(doctor): detect upstream Copilot Windows pwsh dispatch bug + bench evidence |
+| `53ab66c` | fix | fix(doctor, setup): audit-driven follow-up — bounded log read + bench-script relocation |
+| `ffff6af` | chore | chore(gitignore): ignore .omcp-smoke/ working dir |
+| (this) | Z | chore(release): v1.5.0 |
+
+The v1.4 post-cut live smoke at `C:\Users\runjiashi\Temp\omcp-v14-smoke`
+surfaced two issues that v1.4's deterministic vitest suite could not
+catch: MCP server load failures (`@modelcontextprotocol/sdk` MODULE_NOT_FOUND)
+and the upstream Copilot Windows pwsh dispatch bug (eval_stdin
+SyntaxError across all 13 hook events). v1.5 fixes the MCP issue
+end-to-end and adds detection for the upstream issue. The upstream
+issue cannot be worked around from omcp's side — bench reproductions
+across 8 command-form variants × 7 env-variant tests + NODE_OPTIONS
+permutations all PASS in isolation while the live session continues
+to fail. This bench-vs-live gap points to a Copilot embedded Node
+v24.16.0 SEA boundary that needs an upstream fix.
+
+team+critic verification per fix (same standard as v1.1/v1.2/v1.3/v1.4):
+- Architect + Critic independent reviews of 3572efa (setup MCP deps)
+  and 91b36ce (doctor probe) — both APPROVE-WITH-RESERVATIONS,
+  converging on 2 items: (I-1) probeHookDeliveryHealth was reading
+  the entire log via readFileSync; (I-2) bench scripts in scripts/
+  were being shipped via SOURCE_ROOTS + package.json#files.
+- 53ab66c addresses both: readLogTail tails the last 512 KB via
+  openSync+readSync seek; bench scripts moved to
+  docs/probes/copilot-pwsh-dispatch/ (not in SOURCE_ROOTS, not in
+  package.json#files).
+- Pre-tag test-engineer audit on the full v1.5 changeset before the
+  release commit.
+
+Live re-smoke verification (same 2-story PRD as v1.4 smoke):
+- ralph exit 0, files written, PRD passes:true, ralph-state cleared
+- `omcp setup` "added 95 packages in 7s"; `@modelcontextprotocol/sdk`
+  resolvable at plugin install path
+- `omcp doctor` emits WARN "eval_stdin failures in process-*.log —
+  upstream Copilot Windows pwsh dispatch bug" with link to
+  investigation doc
+- Stop hook handler still does not execute under upstream bug — but
+  end-to-end ralph behavior is correct because mode.ts post-spawn
+  re-read (v1.4 Fix A) handles cleanup independently of Stop hook
+
+## v1.4.0 deliverables (history)
 
 8 commits + operational settings.json refresh atop v1.3.0:
 
@@ -112,7 +161,41 @@ team+critic verification applied per phase (same standard as v1.1, v1.2):
 - No Architect-Critic disagreement → no tie-breaker needed.
 - L3.6 smoke conducted post-Wave-A as release-verify.
 
-## v1.5.0 follow-ups (carry forward, prioritized)
+## v1.6.0 follow-ups (carry forward, prioritized)
+
+### Tier 1 — file upstream issue + monitor
+
+1. **File the upstream Copilot pwsh dispatch issue** at
+   github.com/github/copilot-cli. Issue body draft is ready in
+   docs/upstream-reports/copilot-pwsh-dispatch-v1.5-investigation.md
+   Part 4. Cites related issues #2540, #2585, #3063, #1680, #2355.
+   Reference the 4 bench scripts at
+   docs/probes/copilot-pwsh-dispatch/test-*.cjs so the Copilot team
+   has a reproduction harness.
+2. **L3.6 long-run live smoke re-run** after upstream fix lands. Until
+   then, `omcp doctor` is the user-facing detection signal — the
+   end-to-end ralph behavior is correct because of mode.ts post-spawn
+   re-read fallback.
+
+### Tier 2 — polish identified by v1.5 audits
+
+3. **DEP0190 warning during `omcp setup`** — `shell: process.platform
+   === "win32"` triggers Node 24's deprecation warning. Resolution
+   path: resolve npm.cmd to absolute path via `where npm` or via
+   `npm_execpath`, drop shell:true. Attempted in this session but
+   Node spawn semantics for direct `.cmd` invocation are fragile;
+   needs deeper investigation.
+4. **package-lock.json at plugin install path** — currently the
+   minimal runtime manifest uses caret ranges with no lockfile, so
+   floating-version drift is possible. Ship `package-lock.json`
+   alongside the minimal manifest and use `--frozen-lockfile` for
+   reproducible installs.
+5. **Stream/incremental log scan** — currently readLogTail reads the
+   last 512 KB into memory. For very long sessions (10+ MB logs) this
+   is fine, but a streaming regex scan with `createReadStream` +
+   early-abort would be more memory-efficient.
+
+### Tier 3 — still-deferred smoke gates
 
 ### Tier 1 — release-verify of v1.4 fixes against real Copilot
 

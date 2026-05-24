@@ -7,6 +7,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-05-24
+
+### Notable — MCP plugin-install deps + upstream pwsh dispatch bug detection
+
+The v1.4 post-cut live smoke at `C:\Users\runjiashi\Temp\omcp-v14-smoke`
+surfaced two issues that v1.4 deterministic tests could not catch:
+
+1. **62 occurrences of `Cannot find package '@modelcontextprotocol/sdk'`**
+   from MCP server startup — `omcp setup` was copying `dist/` to the
+   plugin install path but never installing `node_modules` there.
+2. **36+ occurrences of `HookExitCodeError: code 1` with `eval_stdin
+   SyntaxError`** stack traces across all 13 hook event types — Copilot's
+   Windows pwsh dispatch boundary drops the script-path argument from the
+   `pwsh.exe -nop -nol -c <command>` wrapper, causing Node to enter
+   `eval_stdin` mode and parse the JSON payload as TypeScript.
+
+v1.5 fixes (1) and adds detection for (2). The upstream pwsh dispatch bug
+cannot be worked around on omcp's side — bench reproductions across 8
+command-form variants × 7 env-variant tests all PASS while the live
+session fails. The bench-vs-live gap is itself diagnostic and points to
+a Copilot embedded Node v24.16.0 SEA → pwsh.exe → Node v24.14.1 child
+boundary issue that needs an upstream fix.
+
+Tests: 1133 → 1156 passing (+23 new), 2 skipped, 0 failed (1 pre-existing
+worker-fork EPERM baseline unchanged since v0.4.0). Build: tsc clean.
+
+### Tier 1 — MCP plugin-install deps fix
+
+- `3572efa` **fix(setup): write minimal runtime package.json + npm install
+  MCP deps in plugin install dir**. `omcp setup` now writes a minimal
+  runtime manifest (name `oh-my-copilot-plugin-runtime`, type `module`,
+  private, dependencies-only — no devDependencies, scripts, or bin) to
+  `~/.copilot/installed-plugins/oh-my-copilot/oh-my-copilot/`, then runs
+  `npm install --omit=dev --ignore-scripts --prefer-offline --no-audit
+  --no-fund` in that directory. All 10 MCP servers (state, notepad,
+  trace, project-memory, loop, code-intel, hermes, wiki, python-repl,
+  shared-memory) can now resolve `@modelcontextprotocol/sdk` and the
+  other 4 runtime deps (commander, jsonc-parser, chalk, zod). Verified
+  live: "added 95 packages in 7s" + the sdk directory is present at
+  `plugin/node_modules/@modelcontextprotocol/sdk/`. 9 deterministic
+  vitest assertions cover write, spawn args, ENOENT, exit-1, dryRun,
+  skipDepsInstall, idempotency, plus 2 regression guards against
+  accidentally adding `node_modules` or `package.json` to the cpSync
+  source arrays.
+
+### Tier 1 — upstream pwsh dispatch bug detection
+
+- `91b36ce` **feat(doctor): detect upstream Copilot Windows pwsh dispatch
+  bug + bench evidence**. New `omcp doctor` check 9 + pure analyzer
+  `analyzeHookDeliveryFromLog()` + filesystem probe `probeHookDeliveryHealth()`.
+  Scans the most recent Copilot log file under `~/.copilot/logs/` for
+  `node:internal/main/eval_stdin` SyntaxError signatures and emits a
+  warn-level check with a link to the v1.5 investigation doc.
+  Distinguishes the upstream eval_stdin pattern from bare
+  HookExitCodeError (latter = handler ran and exited 1 for non-upstream
+  reasons; different remediation). 11 deterministic tests cover the
+  pure analyzer + filesystem probe + log-file-selection-by-mtime.
+
+  The investigation produced 4 bench scripts at
+  `docs/probes/copilot-pwsh-dispatch/test-*.cjs`. The bench scripts
+  cover 8 command-form variants × 7 env-variant tests + NODE_OPTIONS
+  + windowsVerbatimArguments permutations. None reproduce the live
+  failure — the gap is itself diagnostic of the upstream boundary.
+
+  Investigation report at
+  `docs/upstream-reports/copilot-pwsh-dispatch-v1.5-investigation.md`
+  with upstream issue body draft ready to file at
+  github.com/github/copilot-cli.
+
+### Tier 1 — audit-driven follow-up
+
+- `53ab66c` **fix(doctor, setup): audit-driven follow-up — bounded log
+  read + bench-script relocation**. Architect + critic independent
+  reviews of `3572efa` + `91b36ce` converged on 2 items:
+  - I-1: `probeHookDeliveryHealth` was reading the entire Copilot log
+    into memory via `readFileSync`. On a 50 MB log this allocates ~100 MB
+    V8 string and blocks doctor for seconds. Fixed: introduce
+    `readLogTail(filePath)` reading at most 512 KB from the file tail
+    via `openSync` + `readSync` with seek to `fileSize - 512KB`. Hook
+    errors are appended at runtime so the trailing window covers
+    ~5000 typical stack frames. 3 new tests cover small file (full
+    read), large file (tail-only), and tail-read of huge synthetic log
+    correctly surfacing trailing eval_stdin.
+  - I-2: bench scripts `scripts/test-*.cjs` were being copied to the
+    plugin install dir AND shipped in the npm tarball via
+    `package.json#files`. Moved to `docs/probes/copilot-pwsh-dispatch/`
+    which is in neither `SOURCE_ROOTS` nor `files` — bench scripts
+    stay in the repo for future investigators but are excluded from
+    any user-facing install.
+
+### Tier 2 — operational + hygiene
+
+- `ffff6af` **chore(gitignore): ignore .omcp-smoke/ working dir**.
+  Smoke working directory was untracked but accumulating debris across
+  smoke runs. Codified the existing behavior.
+
+- `6d4590b` **docs(smoke): v1.4 iteration live smoke + v1.5 input
+  evidence**. Live re-smoke artifact documenting what v1.4 closed
+  (housekeeping fallback + payload hardening) and what remained open
+  (upstream pwsh dispatch + MCP plugin-install deps) as inputs to
+  v1.5.
+
+### Live re-smoke verification (v1.5)
+
+Re-ran the same 2-story PRD on Copilot 1.0.53-2 after `omcp setup` to
+materialize the v1.5 MCP deps fix:
+
+| Check | v1.4 | v1.5 |
+|---|---|---|
+| ralph exit code | 0 | 0 |
+| files + PRD correct + state cleared | YES | YES |
+| MCP server load successful | NO (62 MODULE_NOT_FOUND) | YES (`@modelcontextprotocol/sdk` present at plugin install path) |
+| `omcp doctor` detects upstream bug | (probe didn't exist) | WARN ("eval_stdin failures in process-*.log") |
+| Stop hook handler runs (`incrementRalphIteration`) | NO (upstream pwsh) | NO (upstream pwsh — unchanged) |
+
+End-user-visible ralph behavior is correct because mode.ts post-spawn
+re-read (v1.4 Fix A in 3175be5) handles cleanup independently of Stop
+hook delivery. The doctor probe surfaces the still-broken upstream
+pipeline so users know.
+
+### What's still pending (carry forward to v1.6.0)
+
+- **Upstream Copilot pwsh dispatch bug** — file the upstream issue
+  (draft in copilot-pwsh-dispatch-v1.5-investigation.md), monitor for
+  fix on Copilot side. Workaround attempts deferred until upstream
+  triages.
+- **DEP0190 deprecation warning** during `omcp setup` — `shell:
+  process.platform === "win32"` triggers Node 24's
+  shell-with-args-concatenation warning. Args are static so the
+  warning is a known false positive. Resolution: replace shell:true
+  with absolute-path npm.cmd resolution (attempted in this session
+  but Node spawn semantics for .cmd without shell are fragile).
+- **L3.6 long-run live smoke re-run** after upstream pwsh fix lands.
+- **L2.4 verify-phase live smoke** + **L2.9 team multi-agent live
+  smoke** — still deferred since v1.2/v1.3.
+- **MCP plugin-install package-lock.json** — currently the minimal
+  manifest uses caret ranges; no lockfile at install path means
+  floating-version risk.
+- **Daemon mode** + **modifiedArgs surgeon** + **marketplace publish**
+  (user-demand gated).
+
 ## [1.4.0] — 2026-05-24
 
 ### Notable — housekeeping RCA + Copilot Stop-payload hardening + canonical --yolo
