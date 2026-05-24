@@ -82,19 +82,23 @@ describe("ralph state-machine wiring in runMode", () => {
     expect((stateAtSpawn as Record<string, unknown>).prompt).toBe("build the thing");
   });
 
-  it("clears ralph-state after copilot exits", () => {
+  it("preserves ralph-state after copilot exits zero without allComplete or architectApproved (resume-ready)", () => {
+    // L3.3: clearRalphState is now conditional. Without a completed PRD or
+    // architectApproved flag the state is preserved for crash-recovery resume.
     runMode({ mode: "ralph", task: "cleanup task" });
-    expect(existsSync(stateFile(cwd))).toBe(false);
+    expect(existsSync(stateFile(cwd))).toBe(true);
   });
 
-  it("clears ralph-state even when copilot exits non-zero", async () => {
+  it("preserves ralph-state on non-zero exit (resume-ready)", async () => {
+    // L3.3: non-zero exit always preserves state so a subsequent `omcp ralph`
+    // can resume from where it left off (crash / SIGINT / OOM recovery).
     const { spawnSync } = await import("node:child_process");
     (spawnSync as SpawnMock).mockImplementationOnce(() => ({
       status: 1, pid: 1, output: [], stdout: null, stderr: null, signal: null, error: undefined,
     }));
 
     runMode({ mode: "ralph", task: "failing task" });
-    expect(existsSync(stateFile(cwd))).toBe(false);
+    expect(existsSync(stateFile(cwd))).toBe(true);
   });
 
   it("initial iteration is always 1 regardless of pre-existing stale state", async () => {
@@ -163,12 +167,15 @@ describe("ralph state-machine wiring in runMode", () => {
 
     const prdPath = join(cwd, ".omcp", "prd.json");
     mkdirSync(join(cwd, ".omcp"), { recursive: true });
+    // L3.3: state is only cleared when allComplete===true (or architectApproved).
+    // Mark the single story as passes:true so getPrdCompletionStatus returns
+    // allComplete===true and the post-exit conditional clear fires.
     writeFileSync(prdPath, JSON.stringify({
       project: "test",
       branchName: "main",
       description: "d",
       userStories: [
-        { id: "US-001", title: "T1", description: "d", acceptanceCriteria: [], priority: 1, passes: false },
+        { id: "US-001", title: "T1", description: "d", acceptanceCriteria: [], priority: 1, passes: true },
       ],
     }));
 
@@ -179,7 +186,7 @@ describe("ralph state-machine wiring in runMode", () => {
 
     runMode({ mode: "ralph", task: "PRD task", prdPath });
 
-    // After runMode: state is cleared.
+    // After runMode: allComplete===true triggered the conditional clear.
     expect(readRalphState(cwd)).toBeNull();
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   applyOmcpRuntimeWiring,
+  EVENT_DEFAULT_TIMEOUTS,
   hasOmcpHookWiring,
   hasOmcpStatusLine,
   mergeCopilotHooks,
@@ -93,7 +94,10 @@ describe("mergeMcpServers", () => {
 
 describe("mergeCopilotHooks", () => {
   it("creates entries for all default omcp hook events", () => {
-    const next = mergeCopilotHooks(undefined);
+    // Pass an explicit omcpBin override so the command form is predictable in
+    // tests (the real default emits `node "<abs>"` to bypass the npm shim layer
+    // on Windows — see L1.1 / resolveHookCommandBin).
+    const next = mergeCopilotHooks(undefined, { omcpBin: "omcp" });
     for (const event of OMCP_HOOK_EVENTS) {
       expect(next[event]).toBeDefined();
       expect(next[event]).toHaveLength(1);
@@ -105,7 +109,9 @@ describe("mergeCopilotHooks", () => {
         __omcp: true,
       });
       expect(matcher.hooks[0].command).toContain(`omcp hook fire ${event} --json`);
-      expect(matcher.hooks[0].timeout).toBe(5);
+      // EVENT_DEFAULT_TIMEOUTS overrides the base 5s for Stop and PreCompact.
+      const expectedTimeout = EVENT_DEFAULT_TIMEOUTS[event] ?? 5;
+      expect(matcher.hooks[0].timeout).toBe(expectedTimeout);
     }
   });
 

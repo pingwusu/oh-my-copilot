@@ -77,9 +77,12 @@ describe("mode-state session isolation", () => {
     );
 
     // Same session: autopilot conflicts with ralph.
+    // L3.4: canStartMode now includes stale:boolean in the conflict response.
+    // The state has started_at:"2026" which is >60 min old, so stale:true.
     expect(canStartMode("autopilot", "sess-A")).toEqual({
       ok: false,
       conflict: "ralph",
+      stale: true,
     });
     // Different session: clear to start.
     expect(canStartMode("autopilot", "sess-B")).toEqual({ ok: true });

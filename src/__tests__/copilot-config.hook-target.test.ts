@@ -44,7 +44,10 @@ describe("Phase 1 hook-target fix", () => {
     // Spot-check one well-known event
     expect(settings.hooks.PreToolUse).toBeDefined();
     const omcpEntry = settings.hooks.PreToolUse[0];
-    expect(omcpEntry.hooks[0].command).toContain("omcp hook fire PreToolUse --json");
+    // L1.1: default command is now `node "<abs>" hook fire ...` form; match
+    // the stable suffix that is present in both the new absolute-node form and
+    // any explicit omcpBin override.
+    expect(omcpEntry.hooks[0].command).toContain("hook fire PreToolUse --json");
     expect(omcpEntry.hooks[0].__omcp).toBe(true);
   });
 

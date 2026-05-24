@@ -54,8 +54,11 @@ describe("runSetup", () => {
     const settings = JSON.parse(readFileSync(join(tmp, "settings.json"), "utf8"));
     expect(settings.hooks).toBeDefined();
     expect(settings.hooks.PreToolUse).toBeDefined();
+    // L1.1: default command is now `node "<abs>" hook fire ...` form; match
+    // the stable suffix present in both the absolute-node form and any
+    // explicit omcpBin override.
     expect(settings.hooks.PreToolUse[0].hooks[0].command).toContain(
-      "omcp hook fire PreToolUse --json",
+      "hook fire PreToolUse --json",
     );
     expect(settings.hooks.PreToolUse[0].hooks[0].__omcp).toBe(true);
     expect(config.hooks).toBeUndefined();
