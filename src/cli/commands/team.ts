@@ -90,10 +90,13 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
   if (tmuxAvailable()) {
     const sessionName = `omcp-team-${sessionId.slice(0, 8)}`;
     const cmds = Array.from({ length: spec.count }, (_, i) => {
-      const args = ["-p", `${task} (worker ${i + 1}/${spec.count})`, "--allow-all-tools"];
+      const workerIndex = i + 1;
+      const args = ["-p", `${task} (worker ${workerIndex}/${spec.count})`, "--allow-all-tools"];
       if (spec.agent) args.push("--agent", spec.agent);
-      const log = join(logDir, `worker-${i + 1}.log`);
-      return `copilot ${args.map((a) => JSON.stringify(a)).join(" ")} 2>&1 | tee ${JSON.stringify(log)}`;
+      const log = join(logDir, `worker-${workerIndex}.log`);
+      // Prefix env vars so the spawned copilot process inherits them.
+      const envPrefix = `OMCP_TEAM_SESSION_ID=${JSON.stringify(sessionId)} OMCP_TEAM_WORKER_INDEX=${workerIndex}`;
+      return `${envPrefix} copilot ${args.map((a) => JSON.stringify(a)).join(" ")} 2>&1 | tee ${JSON.stringify(log)}`;
     });
     spawnSync("tmux", ["new-session", "-d", "-s", sessionName, cmds[0]], {
       stdio: "inherit",
@@ -115,11 +118,17 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
   mkdirSync(pidDir, { recursive: true });
 
   for (let i = 0; i < spec.count; i++) {
-    const args = ["-p", `${task} (worker ${i + 1}/${spec.count})`, "--allow-all-tools"];
+    const workerIndex = i + 1;
+    const args = ["-p", `${task} (worker ${workerIndex}/${spec.count})`, "--allow-all-tools"];
     if (spec.agent) args.push("--agent", spec.agent);
     const child = spawnCrossPlatform("copilot", args, {
       detached: true,
       stdio: "ignore",
+      env: {
+        ...process.env,
+        OMCP_TEAM_SESSION_ID: sessionId,
+        OMCP_TEAM_WORKER_INDEX: String(workerIndex),
+      },
     });
     child.unref();
     if (child.pid !== undefined) {
