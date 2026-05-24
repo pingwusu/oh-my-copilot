@@ -26,6 +26,7 @@ export interface VerifyPhaseOptions {
   spawn?: (
     bin: string,
     args: string[],
+    opts: { timeout: number },
   ) => Pick<SpawnSyncReturns<Buffer>, "status" | "stdout" | "stderr" | "signal">;
   /** Test hook — override cwd used for state files. */
   cwd?: string;
@@ -62,7 +63,7 @@ const CRITIC_PROMPT_TEMPLATE = (submission: string) =>
 export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
   const cwd = opts.cwd ?? process.cwd();
   const maxIterations = opts.maxIterations ?? 5;
-  const timeout = opts.timeout ?? 600;
+  const timeout = opts.timeout === undefined ? 600 : opts.timeout;
 
   // Validate phase-id via assertSafeSlug (invariant 1).
   let phaseId: string;
@@ -75,11 +76,11 @@ export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
 
   const doSpawn =
     opts.spawn ??
-    ((bin: string, args: string[]) =>
+    ((bin: string, args: string[], spawnOpts: { timeout: number }) =>
       spawnSync(bin, args, {
         encoding: "buffer",
         shell: false,
-        timeout: timeout * 1000,
+        timeout: spawnOpts.timeout,
         killSignal: "SIGTERM",
       }));
 
@@ -105,7 +106,7 @@ export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
 
     // Spawn architect with a fresh session (no --resume / --inject).
     const architectArgs = ["-p", ARCHITECT_PROMPT_TEMPLATE(submission), "--allow-all-tools"];
-    const architectResult = doSpawn("copilot", architectArgs);
+    const architectResult = doSpawn("copilot", architectArgs, { timeout: timeout * 1000 });
     if (architectResult.status === null) {
       console.error(
         `omcp verify-phase: architect subprocess timed out (signal=${architectResult.signal ?? "unknown"}) — treating as ITERATE`,
@@ -121,7 +122,7 @@ export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
 
     // Spawn critic with an independent session id (never injected into architect's session).
     const criticArgs = ["-p", CRITIC_PROMPT_TEMPLATE(submission), "--allow-all-tools"];
-    const criticResult = doSpawn("copilot", criticArgs);
+    const criticResult = doSpawn("copilot", criticArgs, { timeout: timeout * 1000 });
     if (criticResult.status === null) {
       console.error(
         `omcp verify-phase: critic subprocess timed out (signal=${criticResult.signal ?? "unknown"}) — treating as ITERATE`,

@@ -32,7 +32,7 @@ function writeSubmission(dir: string, phaseId: string, content = "# Submission\n
 
 /** Build a mock spawn that returns the given stdout for every call. */
 function mockSpawn(stdout: string) {
-  return vi.fn((_bin: string, _args: string[]) => ({
+  return vi.fn((_bin: string, _args: string[], _opts: { timeout: number }) => ({
     status: 0,
     stdout: Buffer.from(stdout, "utf8"),
     stderr: Buffer.from("", "utf8"),
@@ -42,7 +42,7 @@ function mockSpawn(stdout: string) {
 /** Build a mock spawn that alternates between two stdout values per call index. */
 function mockSpawnSequence(responses: string[]) {
   let call = 0;
-  return vi.fn((_bin: string, _args: string[]) => {
+  return vi.fn((_bin: string, _args: string[], _opts: { timeout: number }) => {
     const stdout = responses[call] ?? responses[responses.length - 1];
     call++;
     return {
@@ -246,24 +246,38 @@ describe("runVerifyPhase", () => {
 
   // ── timeout option ─────────────────────────────────────────────────────────
 
-  it("defaults timeout to 600 when not provided (spawn receives no extra timeout arg via injection)", () => {
-    // When timeout is omitted, runVerifyPhase should still work correctly —
-    // the default of 600 is applied inside the real-spawnSync path, but the
-    // injected spawn is called with the same signature regardless.
+  it("verifies default-600 threading: spawn receives timeout=600*1000 ms when timeout is omitted", () => {
     writeSubmission(dir, "timeout-default");
     const spawn = mockSpawn("\nAPPROVE\n");
     const r = runVerifyPhase({ phaseId: "timeout-default", cwd: dir, spawn });
     // Default behaviour: both APPROVE → exit 0.
     expect(r.exitCode).toBe(0);
     expect(r.iterations).toBe(1);
+    // The spawned process must receive the converted millisecond value.
+    expect(spawn.mock.calls[0][2].timeout).toBe(600 * 1000);
   });
 
-  it("accepts an explicit timeout option without affecting pass/fail outcome", () => {
+  it("verifies explicit-timeout threading: spawn receives timeout=30*1000 ms when timeout=30 is given", () => {
     writeSubmission(dir, "timeout-explicit");
     const spawn = mockSpawn("\nAPPROVE\n");
     const r = runVerifyPhase({ phaseId: "timeout-explicit", timeout: 30, cwd: dir, spawn });
     expect(r.exitCode).toBe(0);
     expect(r.iterations).toBe(1);
+    // The spawned process must receive 30 seconds converted to milliseconds.
+    expect(spawn.mock.calls[0][2].timeout).toBe(30 * 1000);
+  });
+
+  it("--timeout 0 means no timeout (passthrough to spawnSync behavior)", () => {
+    // timeout: 0 must NOT be silently replaced by 600. The user explicitly
+    // opting out of timeout protection must thread 0 all the way through.
+    writeSubmission(dir, "timeout-zero");
+    const spawn = mockSpawn("\nAPPROVE\n");
+    const r = runVerifyPhase({ phaseId: "timeout-zero", maxIterations: 1, timeout: 0, cwd: dir, spawn });
+    // Both APPROVE → clean exit 0.
+    expect(r.exitCode).toBe(0);
+    expect(r.iterations).toBe(1);
+    // The value 0 must reach the spawn hook unchanged (not replaced by 600).
+    expect(spawn.mock.calls[0][2].timeout).toBe(0);
   });
 
   it("treats a timed-out architect spawn (status=null, signal=SIGTERM) as ITERATE, not a crash", () => {
@@ -271,7 +285,7 @@ describe("runVerifyPhase", () => {
     // First two calls simulate architect timeout then critic ITERATE (both → no verdict → ITERATE loop).
     // Subsequent calls: APPROVE + APPROVE to exit cleanly within maxIterations.
     let call = 0;
-    const spawn = vi.fn((_bin: string, _args: string[]) => {
+    const spawn = vi.fn((_bin: string, _args: string[], _opts: { timeout: number }) => {
       call++;
       if (call === 1) {
         // Architect on iteration 1: timed out.
@@ -295,7 +309,7 @@ describe("runVerifyPhase", () => {
   it("treats a timed-out critic spawn (status=null, signal=SIGTERM) as ITERATE, not a crash", () => {
     writeSubmission(dir, "timeout-critic");
     let call = 0;
-    const spawn = vi.fn((_bin: string, _args: string[]) => {
+    const spawn = vi.fn((_bin: string, _args: string[], _opts: { timeout: number }) => {
       call++;
       if (call === 1) {
         // Architect on iteration 1: normal APPROVE.
