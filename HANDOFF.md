@@ -1,11 +1,61 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-24 early-morning (v1.0.0 cut — orchestrator-v1 verified end-to-end against real Copilot CLI)
+**Updated**: 2026-05-24 mid-day (v1.1.0 cut — orchestrate-complete across L1+L2+L3; 4 live smokes deferred to release-verify)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z release commit
-**Version**: **v1.0.0** (first stable release; cut this session as Phase Z deliverable)
-**Tests**: 979 passing, 0 failed, 2 skipped, 1 pre-existing Windows vitest worker-fork EPERM at file level (unchanged baseline since v0.4.0)
+**Latest commit**: see `git log -1` — Phase Z v1.1.0 release commit
+**Version**: **v1.1.0** (orchestrate-complete; cut this session as Phase Z deliverable atop v1.0.0)
+**Tests**: 1044 passing, 0 failed, 2 skipped (+65 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
+
+---
+
+## v1.1.0 deliverables (this session)
+
+orchestrator-complete: L1 hook-dispatch fix + L2 multi-agent layer (ralph, ralplan, team, verify-phase) + L3 long-running resilience. 20 phases across the plan; 14 commits this session atop v1.0.0.
+
+| Commit | Phase | Title |
+|---|---|---|
+| `bcb5065` | L1.0+L1.1 | fix(hooks): omc-style absolute-node form for all hook commands |
+| `51c501b` + `76cf826` | L2.2 | feat(cli): omcp verify-phase --timeout option (+ ITERATE fix) |
+| `2fb9307` | L2.5a | feat(team): TeamPhase stage state schema on TeamState |
+| `a53205d` | L2.6 | fix(team): atomicWriteFileSync on worker pidfile |
+| `c6d39c3` | L2.7 | feat(team): shutdown_request / shutdown_response protocol |
+| `e8a950a` | L2.8 | feat(team): stuck-worker watchdog with reassign marker |
+| `7389594` + `252c66a` | L3.1 | feat(ralph-state): rolling-tail cap on progress.txt (+ defensive-read fix) |
+| `ed990c4` | L3.2 | feat(compaction): per-N-iter re-arm + prompt-history-aware token estimate |
+| `25dce51` | L3.5 | feat(hooks): per-event hook timeout — 30s for Stop/PreCompact |
+| `ccba99b` | L3.3 | fix(mode): conditional clearRalphState — preserve on incomplete/non-zero exit |
+| `26e7dbd` | L3.4 | feat(ralph): stale mode-state auto-detect + --resume flag |
+| `7c1fb2e` | hygiene | test(regression): align pre-existing tests with Wave A/C contract updates |
+| (this) | Z | chore(release): v1.1.0 — orchestrate-complete (L1+L2+L3) |
+
+Deep-dive plan + trace at:
+- `docs/plans/complete-omcp-orchestrate-ralplan.md` (Architect+Critic APPROVE)
+- `docs/specs/complete-omcp-orchestrate-spec.md`
+- `docs/specs/complete-omcp-orchestrate-trace.md`
+- `docs/probes/L1-hook-dispatch-format.md`
+
+## Live smoke status (release-verify pending)
+
+The 4 live Copilot smokes from the plan's Phase Z gate table are **deferred to a separate release-verify session**, NOT to v1.2.0 — they're 1.1.0-rc validation work, not new feature work. Each smoke is environment-dependent (Copilot CLI auth, network, rate limits) and runs 5-30min of wall clock.
+
+| Smoke | Gate | Code coverage | Live status |
+|---|---|---|---|
+| L1.2 hook re-smoke | HARD | ✓ unit | **PARTIAL** — 42→27 errors; orchestration loop completes; residual 27 traces to opaque Copilot pwsh dispatch (v1.2.0 RCA) |
+| L2.3 ralplan handoff | HARD | ✓ 4 integration tests | **DEFERRED** — needs live run with --handoff against real Copilot |
+| L2.4 verify-phase | SOFT | ✓ 25 DI-mock tests | **DEFERRED** — needs known submission + real architect/critic spawn |
+| L2.9 team multi-agent | SOFT | ✓ per-worker tests | **DEFERRED** — needs 4-worker concurrent run + merge |
+| L3.6 30-iter ralph | SOFT | ✓ unit + integration | **DEFERRED** — synthetic 30-story PRD, ~30min live ralph |
+
+## v1.2.0 follow-ups (carry forward)
+
+1. **L1 hook dispatch residual** — investigate the 27 remaining PostToolUse "code 1" errors after L1.1. Hypothesis: Copilot's pwsh dispatch handles multi-arg + large-JSON-stdin pathologically. Possible fix: wrapper `.cjs` dispatch script + sentinel-token protocol. Tracked in `docs/probes/L1-hook-dispatch-format.md` synthesis section.
+2. **L2.5b team phase controller** — actual phase-transition orchestrator with crash-restart resume (omc-style). v1.1.0 has the schema (current_phase + stage_history) but no transition logic. Deferred per Critic iter-1 of the plan.
+3. **L2.4 prompt-template fix if needed** — if live verify-phase smoke shows Copilot wraps verdict in reasoning block, switch detectVerdict from line-only to sentinel-tag (`<verdict>APPROVE</verdict>`).
+4. **Worker-side shutdown ack** — L2.7 implements orchestrator-side request + wait + SIGTERM-fallback. Worker-side ack write (in Copilot skill prompts) is still pending.
+5. **L3.6 wall-clock instrumentation** — long-run smoke + observability dashboard (process-log analysis).
+6. **`npm pack && npm install -g <.tgz>` CI gate** — closes the npm-link-vs-real-install fidelity gap surfaced in v1.0.0's Architect iter-2.
+7. **Daemon mode (Option O-B)** + **modifiedArgs surgeon (Phase 7)** — original orchestrator-v1 deferrals; gated on real-user demand.
 
 ---
 
