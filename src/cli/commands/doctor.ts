@@ -247,6 +247,26 @@ export function runDoctor(): CheckResult[] {
     });
   }
 
+  // 10. Stale hook commands — detect entries in ~/.copilot/settings.json
+  // that point to scripts that no longer exist on disk (the v1.4 RCA
+  // scenario: scripts/omcp-hook-dispatch.cjs was deleted by L1.2 revert
+  // but settings.json was never refreshed). v1.7 US-06 carry-forward
+  // from v1.4 audit. Suggests `omcp setup` to refresh.
+  try {
+    const probe = probeStaleSettings(paths.copilotSettings);
+    checks.push({
+      name: "stale hook commands",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "stale hook commands",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
   return checks;
 }
 
@@ -307,6 +327,105 @@ export function readLogTail(filePath: string): string {
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Scan ~/.copilot/settings.json for omcp-owned hook entries that
+ * reference script files that no longer exist on disk.
+ *
+ * v1.7 US-06 carry-forward from v1.4 RCA: the L1.2 wrapper-script
+ * revert (commit c7cbc21) deleted scripts/omcp-hook-dispatch.cjs but
+ * never refreshed ~/.copilot/settings.json. All 13 hook entries kept
+ * pointing to the deleted file. The L3.6 smoke surfaced "3/3 Stop
+ * handlers exit code 1" as a symptom. This probe catches the same
+ * shape BEFORE runtime so the user can `omcp setup` to refresh.
+ *
+ * Returns ok if settings.json absent (nothing to check) or all paths
+ * resolve. Returns warn if any omcp-owned hook command references a
+ * missing script.
+ */
+export function probeStaleSettings(
+  settingsPath: string,
+): { level: CheckLevel; detail: string } {
+  if (!existsSync(settingsPath)) {
+    return { level: "ok", detail: "no settings.json yet" };
+  }
+  return analyzeStaleSettingsFromJson(
+    readFileSync(settingsPath, "utf8"),
+    settingsPath,
+  );
+}
+
+/**
+ * Pure analyzer for ~/.copilot/settings.json content. Exported for
+ * testing. Scans hook entries marked `__omcp: true`, extracts the
+ * script path from each `command` string (regex `node "<path>"`), and
+ * checks `existsSync(scriptPath)`.
+ */
+export function analyzeStaleSettingsFromJson(
+  jsonContent: string,
+  settingsPath: string,
+): { level: CheckLevel; detail: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonContent);
+  } catch {
+    return {
+      level: "warn",
+      detail: `settings.json at ${settingsPath} is not valid JSON; run \`omcp setup\` to rewrite.`,
+    };
+  }
+  const root = parsed as { hooks?: Record<string, unknown> };
+  if (!root.hooks || typeof root.hooks !== "object") {
+    return { level: "ok", detail: "no hook entries in settings.json" };
+  }
+  const stale: { event: string; path: string }[] = [];
+  let totalOmcpEntries = 0;
+  for (const [event, matchers] of Object.entries(root.hooks)) {
+    if (!Array.isArray(matchers)) continue;
+    for (const matcher of matchers) {
+      const hooks = (matcher as { hooks?: unknown[] }).hooks;
+      if (!Array.isArray(hooks)) continue;
+      for (const h of hooks) {
+        const entry = h as {
+          command?: string;
+          __omcp?: boolean;
+        };
+        if (entry.__omcp !== true) continue;
+        if (typeof entry.command !== "string") continue;
+        totalOmcpEntries++;
+        // Extract script path from `node "<path>" ...` or
+        // `<path> hook fire ...` (legacy bare form).
+        const nodeMatch = entry.command.match(/node\s+"([^"]+)"/);
+        const candidate = nodeMatch?.[1];
+        if (candidate && !existsSync(candidate)) {
+          stale.push({ event, path: candidate });
+        }
+      }
+    }
+  }
+  if (totalOmcpEntries === 0) {
+    return {
+      level: "ok",
+      detail: "no omcp-owned hook entries in settings.json (run `omcp setup` to wire)",
+    };
+  }
+  if (stale.length === 0) {
+    return {
+      level: "ok",
+      detail: `${totalOmcpEntries} omcp hook entries verified — all script paths exist`,
+    };
+  }
+  const sample = stale
+    .slice(0, 3)
+    .map((s) => `${s.event}→${s.path.split(/[\\/]/).pop()}`)
+    .join(", ");
+  return {
+    level: "warn",
+    detail:
+      `${stale.length}/${totalOmcpEntries} omcp hook entries reference missing scripts ` +
+      `(${sample}${stale.length > 3 ? ", ..." : ""}). Run \`omcp setup\` to refresh.`,
+  };
 }
 
 /**
