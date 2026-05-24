@@ -112,7 +112,7 @@ describe("setup writes minimal runtime package.json + runs npm install (v1.5)", 
     expect(report.depsInstallSkipped).toBe(false);
   });
 
-  it("test 2: invokes npm install with correct args + cwd + windows-shell guard", async () => {
+  it("test 2: first-time install (no lockfile) invokes `npm install` with correct args + cwd + windows-shell guard", async () => {
     await runSetup({ packageRoot: PACKAGE_ROOT });
 
     expect(spawnSyncMock).toHaveBeenCalledTimes(1);
@@ -134,6 +134,29 @@ describe("setup writes minimal runtime package.json + runs npm install (v1.5)", 
       join(tmp, "installed-plugins", "oh-my-copilot", "oh-my-copilot"),
     );
     expect(options.shell).toBe(process.platform === "win32");
+  });
+
+  it("test 2b (v1.7 US-04): existing lockfile triggers `npm ci` for reproducibility", async () => {
+    // Pre-create a fake lockfile at the plugin install dir so setup
+    // sees existsSync(lockfile) === true and switches to npm ci.
+    const pluginDir = join(tmp, "installed-plugins", "oh-my-copilot", "oh-my-copilot");
+    require("node:fs").mkdirSync(pluginDir, { recursive: true });
+    require("node:fs").writeFileSync(join(pluginDir, "package-lock.json"), "{}");
+
+    await runSetup({ packageRoot: PACKAGE_ROOT });
+
+    // setup may call spawn more than once if a re-entry happens; we
+    // want the FIRST call to be ci. Inspect what was invoked.
+    const [_cmd, args] = spawnSyncMock.mock.calls[0] as [
+      string,
+      string[],
+      Record<string, unknown>,
+    ];
+    expect(args[0]).toBe("ci");
+    expect(args).toContain("--omit=dev");
+    expect(args).toContain("--ignore-scripts");
+    // --prefer-offline is install-only; ci pulls from lockfile.
+    expect(args).not.toContain("--prefer-offline");
   });
 
   it("test 3: npm install failure (status !== 0) throws descriptive error", async () => {

@@ -137,27 +137,40 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
     );
 
     if (!skipDepsInstall) {
+      // v1.7 US-04: prefer `npm ci` when an existing package-lock.json
+      // is present at the plugin install dir. `ci` is reproducible
+      // (matches lockfile exactly + clears node_modules first) and
+      // faster than `install` for re-runs. First-time setup has no
+      // lockfile → fall back to `install` which creates one for the
+      // next run.
+      //
+      // True dev-version pinning (shipping a curated lockfile with the
+      // omcp npm package) is a separate concern tracked as v1.8 work;
+      // current behavior pins WITHIN a user's install across re-runs
+      // but does not pin to the version omcp's authors tested with.
+      const lockPath = join(paths.omcpPluginDir, "package-lock.json");
+      const useCi = existsSync(lockPath);
+      const npmArgs = useCi
+        ? ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"]
+        : [
+            "install",
+            "--omit=dev",
+            "--ignore-scripts",
+            "--prefer-offline",
+            "--no-audit",
+            "--no-fund",
+          ];
+
       // `shell: process.platform === "win32"` is required so Node can find
       // npm's `.cmd` shim via PATHEXT on Windows. Node 24 emits DEP0190
       // (shell:true concatenates args, theoretical injection vector) — our
-      // args are static so the warning is a known false positive. v1.6
-      // follow-up could resolve npm.cmd to an absolute path to drop shell.
-      const result = spawnSync(
-        "npm",
-        [
-          "install",
-          "--omit=dev",
-          "--ignore-scripts",
-          "--prefer-offline",
-          "--no-audit",
-          "--no-fund",
-        ],
-        {
-          cwd: paths.omcpPluginDir,
-          stdio: "inherit",
-          shell: process.platform === "win32",
-        },
-      );
+      // args are static so the warning is a known false positive. v1.7
+      // multi-direction follow-up tracked in roadmap.
+      const result = spawnSync("npm", npmArgs, {
+        cwd: paths.omcpPluginDir,
+        stdio: "inherit",
+        shell: process.platform === "win32",
+      });
       if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(
           `npm not found on PATH. Install Node.js (https://nodejs.org) or run ` +
