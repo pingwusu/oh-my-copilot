@@ -167,3 +167,57 @@ describe("runTeam detached mode writes pidfiles", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase L2.6 — atomicWriteFileSync for pidfiles + invariants.md carve-out lifted
+// ---------------------------------------------------------------------------
+describe("runTeam pidfile atomicity (Phase L2.6)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "omcp-team-atomic-"));
+    vi.spyOn(process, "cwd").mockReturnValue(tmp);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("pidfile written by runTeam leaves no .tmp residue (atomic-write semantics)", async () => {
+    const { runTeam, parseTeamSpec } = await import("../cli/commands/team.js");
+    const spec = parseTeamSpec("1");
+    const report = runTeam(spec, "atomic test");
+
+    if (report.mode === "detached") {
+      const pidDir = report.pidDir!;
+      expect(existsSync(pidDir)).toBe(true);
+      // atomicWriteFileSync renames a .tmp.<pid>.<rand> file over the target;
+      // on success, no .tmp. residue should remain.
+      const { readdirSync } = await import("node:fs");
+      const files = readdirSync(pidDir);
+      expect(files.some((f) => f.includes(".tmp."))).toBe(false);
+    } else {
+      // tmux mode — pidDir not used; test passes trivially.
+      expect(report.mode).toBe("tmux");
+    }
+  });
+
+  it("pidfile content is a valid positive integer after atomic write", async () => {
+    const { runTeam, parseTeamSpec } = await import("../cli/commands/team.js");
+    const spec = parseTeamSpec("1");
+    const report = runTeam(spec, "pid-content test");
+
+    if (report.mode === "detached") {
+      const pidFile = join(report.pidDir!, "worker-1.pid");
+      if (existsSync(pidFile)) {
+        const raw = readFileSync(pidFile, "utf8").trim();
+        const pid = Number(raw);
+        expect(Number.isFinite(pid)).toBe(true);
+        expect(pid).toBeGreaterThan(0);
+      }
+    } else {
+      expect(report.mode).toBe("tmux");
+    }
+  });
+});

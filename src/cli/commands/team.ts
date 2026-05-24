@@ -18,7 +18,6 @@ import {
   readdirSync,
   readFileSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -27,6 +26,7 @@ import { mergeShards } from "../../lib/team-shard-state.js";
 import type { MergeReport } from "../../lib/team-shard-state.js";
 import { writeModeState } from "../../runtime/mode-state.js";
 import type { TeamState } from "../../runtime/mode-state.js";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 
 export interface TeamSpec {
   count: number;
@@ -119,7 +119,8 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
     child.unref();
     if (child.pid !== undefined) {
       // Record the worker pid so stopTeam can SIGTERM it later.
-      writeFileSync(join(pidDir, `worker-${i + 1}.pid`), String(child.pid));
+      // Invariant 2: use atomicWriteFileSync (carve-out lifted in Phase L2.6).
+      atomicWriteFileSync(join(pidDir, `worker-${i + 1}.pid`), String(child.pid));
     }
   }
   return {

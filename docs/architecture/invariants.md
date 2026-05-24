@@ -47,13 +47,6 @@ hook process is killed mid-write.
 - `src/hooks/wiki/storage.ts` — wiki page/index/log writes
 
 **Carve-outs:**
-- `src/cli/commands/team.ts:99` — bare `writeFileSync` for **pidfiles**
-  (`.omcp/state/team/<sessionId>/worker-K.pid`). Pidfiles contain a single
-  integer string, not JSON. Atomicity is not required because a torn write of
-  a PID integer is either the correct PID or empty — both are safe (empty is
-  treated as "not started"). Using `openSync` + `writeSync` + exclusive lock
-  in loop-watcher is the stricter pattern when a TOCTOU window matters, but
-  detached team workers don't have that constraint.
 - `src/mcp/hermes-bridge.ts:223` — bare `writeFileSync(log, "")` to **touch a
   log file** before a detached child opens it for append. This is an
   initialisation write of an empty string to a log path, not a state JSON file.
