@@ -6,6 +6,7 @@ target/
 # Runtime state directories (omc/omcp orchestration scratch)
 .omc/
 .omcp/
+.omcp-smoke/
 .DS_Store
 .env
 .env.*
