@@ -147,6 +147,37 @@ export function estimateTokens(text: string): number {
 }
 
 /**
+ * Estimate additional tokens contributed by ralph-state.json and progress.txt.
+ *
+ * These files grow as the ralph loop accumulates history and are the primary
+ * driver of prompt-history size for long-running loops.  We read them from
+ * the omcp state dir under `cwd` (best-effort: any I/O failure returns 0).
+ */
+export function estimatePromptHistoryTokens(cwd: string): number {
+  let bytes = 0;
+
+  const ralphStatePath = path.join(cwd, ".omcp", "state", "ralph-state.json");
+  try {
+    if (fs.existsSync(ralphStatePath)) {
+      bytes += fs.readFileSync(ralphStatePath).length;
+    }
+  } catch {
+    // best-effort
+  }
+
+  const progressPath = path.join(cwd, ".omcp", "progress.txt");
+  try {
+    if (fs.existsSync(progressPath)) {
+      bytes += fs.readFileSync(progressPath).length;
+    }
+  } catch {
+    // best-effort
+  }
+
+  return Math.ceil(bytes / CHARS_PER_TOKEN);
+}
+
+/**
  * Analyze context usage based on estimated token count
  */
 export function analyzeContextUsage(

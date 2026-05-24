@@ -219,11 +219,35 @@ export interface CopilotStatusLine {
 export interface MergeHookOptions {
   /** Override the executable used to run `omcp hook fire ...`. Defaults to `omcp`. */
   omcpBin?: string;
-  /** Per-hook timeout in seconds. Defaults to 5s. */
+  /**
+   * Global per-hook timeout in seconds. Used as a fallback when no
+   * per-event override is present. Defaults to 5s for most events;
+   * see EVENT_DEFAULT_TIMEOUTS for events with higher built-in defaults.
+   */
   timeoutSec?: number;
+  /**
+   * Per-event timeout overrides (highest priority). Keys are hook event
+   * names (e.g. "Stop", "PreCompact"). When an event key is present its
+   * value wins over both `timeoutSec` and EVENT_DEFAULT_TIMEOUTS.
+   *
+   * @example { Stop: 60, PreCompact: 45 }
+   */
+  timeoutsByEvent?: Record<string, number>;
   /** Override the list of events to wire. Defaults to OMCP_HOOK_EVENTS. */
   events?: readonly CopilotHookEventName[];
 }
+
+/**
+ * Built-in per-event timeout defaults. Stop and PreCompact run substantial
+ * logic (PRD parsing, allComplete check, compaction analysis) and cold-start
+ * measurement is ~840ms, so they need a larger budget than the base 5s.
+ * All other events fall back to the base 5s default.
+ */
+export const EVENT_DEFAULT_TIMEOUTS: Readonly<Partial<Record<string, number>>> =
+  {
+    Stop: 30,
+    PreCompact: 30,
+  };
 
 function omcpHookCommand(event: string, omcpBin: string): string {
   // Use shell-safe quoting; both POSIX shells and pwsh accept single-token
@@ -317,7 +341,8 @@ export function mergeCopilotHooks(
   // on Windows. See `docs/probes/L1-hook-dispatch-format.md` for the
   // root-cause investigation; mirrors omc's `src/hooks/setup/index.ts:166`.
   const omcpBin = opts.omcpBin ?? resolveHookCommandBin();
-  const timeout = opts.timeoutSec ?? 5;
+  const globalTimeout = opts.timeoutSec;
+  const timeoutsByEvent = opts.timeoutsByEvent ?? {};
   const events = opts.events ?? OMCP_HOOK_EVENTS;
   const next: CopilotHooksMap = {};
 
@@ -336,6 +361,12 @@ export function mergeCopilotHooks(
   }
 
   for (const event of events) {
+    // Priority: timeoutsByEvent[event] > globalTimeout > EVENT_DEFAULT_TIMEOUTS[event] > 5
+    const timeout =
+      timeoutsByEvent[event] ??
+      globalTimeout ??
+      EVENT_DEFAULT_TIMEOUTS[event] ??
+      5;
     const omcpMatcher: CopilotHookMatcher = {
       matcher: "*",
       hooks: [
