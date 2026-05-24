@@ -123,6 +123,16 @@ function checkRalph(
   const state = readRalphState(worktreeRoot);
   if (!state || !state.active) return null;
 
+  // v1.6: defer to mode.ts outer loop if it owns iteration advancement.
+  // When mode.ts sets outerLoopOwned=true on each iteration's state,
+  // the hook MUST NOT also incrementRalphIteration / clearRalphState
+  // — otherwise iteration double-advances when the upstream pwsh
+  // dispatch bug ever gets fixed and Stop hooks start firing again
+  // alongside the outer loop.
+  if (state.outerLoopOwned) {
+    return { kind: "noop" };
+  }
+
   // Check for architect approval in the stop context text.
   // When detected: persist architectApproved=true to state so the next
   // iteration check (state.architectApproved) also exits cleanly.

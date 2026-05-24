@@ -129,7 +129,16 @@ describe("ralph conditional clearRalphState — crash recovery (Phase L3.3)", ()
     writePrd(makePrd(false)); // pending story
     spawnMock.mockReturnValue({ status: 0, pid: 1 });
 
-    runMode({ mode: "ralph", task: "implement stories" });
+    // v1.6: pass maxOuterIterations:1 to preserve the single-spawn semantic
+    // this test was authored for. The v1.6 outer-loop default (20) would
+    // exhaust the cap on a never-completing PRD and preserve state at
+    // iteration:20; the dedicated outer-loop tests (ralph-outer-loop.
+    // integration.test.ts) cover that scenario.
+    runMode({
+      mode: "ralph",
+      task: "implement stories",
+      maxOuterIterations: 1,
+    });
 
     // State must be preserved — PRD not complete, resume-ready.
     // runMode wrote iteration:1 fresh; the key assertion is that state exists.

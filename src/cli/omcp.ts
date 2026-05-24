@@ -343,18 +343,27 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
               : 0;
     });
 
-  // ralph gets extra --prd and --resume options.
+  // ralph gets extra --prd, --resume, and --max-iterations options.
   program
     .command("ralph <task...>")
     .description("Run /oh-my-copilot:ralph non-interactively against Copilot")
     .option("--family <family>", "model family: claude | gpt | auto", "auto")
     .option("--agent <name>", "use a specific omcp agent's recommended model")
     .option("--silent", "suppress stats banner from Copilot")
-    .option("--max-continues <n>", "cap autopilot continuation count", (v) => Number(v))
+    .option(
+      "--max-continues <n>",
+      "cap autopilot continuation count PER SPAWN (Copilot's internal --max-autopilot-continues; does not control outer-loop iteration count)",
+      (v) => Number(v),
+    )
     .option("--prd <path>", "path to PRD JSON file for story-driven execution")
     .option(
       "--resume",
       "auto-clear stale mode-state (>60min old) and proceed; fails if no stale state found",
+    )
+    .option(
+      "--max-iterations <n>",
+      "v1.6: max OUTER-LOOP spawn count for ralph (each iteration = one copilot --autopilot spawn). Default 20. Outer loop tracks iteration counter in ralph-state independently of Copilot's intra-spawn turns. See docs/architecture/v1.6-outer-loop-redesign.md.",
+      (v) => Number(v),
     )
     .action(
       (
@@ -366,6 +375,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           maxContinues?: number;
           prd?: string;
           resume?: boolean;
+          maxIterations?: number;
         },
       ) => {
         const code = runMode({
@@ -378,6 +388,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           maxContinues: opts.maxContinues,
           prdPath: opts.prd,
           resume: opts.resume,
+          maxOuterIterations: opts.maxIterations,
         });
         process.exitCode = code;
       },

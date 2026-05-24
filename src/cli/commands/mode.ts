@@ -63,6 +63,16 @@ export interface ModeOptions {
    * a genuinely active session. Default: false.
    */
   resume?: boolean;
+  /**
+   * v1.6: max iterations for ralph's outer while-loop in mode.ts. Each
+   * iteration re-spawns copilot once and re-reads PRD post-spawn. Caps
+   * the total spawn count, independent of Copilot's internal
+   * --max-autopilot-continues (which still applies per-spawn).
+   *
+   * Default: 20 (generous for typical 10-story PRDs).
+   * Only applies when opts.mode === "ralph".
+   */
+  maxOuterIterations?: number;
 }
 
 // Modes that should run as a continuous loop (Copilot --autopilot keeps going
@@ -258,71 +268,143 @@ export function runMode(opts: ModeOptions): number {
   }
 
   // Ralph-specific: capture a pre-spawn snapshot for crash-recovery on
-  // non-zero exit only. Do NOT use this for the shouldClear decision on
-  // clean exit — the PRD status must be re-read POST-spawn (Fix A, v1.4 RCA).
+  // non-zero exit only. The outer loop below (ralph branch) re-reads
+  // PRD status post-spawn for clean-exit decisions (Fix A, v1.4 RCA).
   const preSpawnRalphSnapshot =
     opts.mode === "ralph" ? readRalphState() : null;
 
-  const result = spawnSyncCrossPlatform("copilot", args, {
-    stdio: "inherit",
-    shell: false,
-  });
+  // v1.6: ralph uses an OUTER while-loop here in mode.ts to advance
+  // iteration counter + drive multiple copilot spawns. This replaces
+  // the previous single-spawn + Stop-hook-based iteration advance,
+  // which was blocked by the upstream Copilot Windows pwsh dispatch
+  // bug (see docs/upstream-reports/copilot-pwsh-dispatch-v1.5-
+  // investigation.md — Stop hooks never execute on Windows 1.0.53-2).
+  //
+  // The hook-side code path is preserved for the day upstream fixes
+  // the bug; outerLoopOwned=true on each iteration's ralph-state
+  // tells checkRalph in persistent-mode/index.ts to defer (return
+  // noop) instead of double-incrementing.
+  //
+  // Non-ralph modes (autopilot, ultrawork, ultraqa, sciomc, team,
+  // ralplan, and all one-shot modes) keep the single-spawn behavior
+  // — they don't have a PRD-driven completion criterion the outer
+  // loop could check.
+  let result: ReturnType<typeof spawnSyncCrossPlatform>;
 
-  if (isTrackedMode) {
-    clearModeState(opts.mode as ModeName);
-  }
-
-  // Ralph-specific: conditionally clear ralph-state after copilot exits.
-  //
-  // Only clear if BOTH conditions hold:
-  //   (a) copilot exited with status 0, AND
-  //   (b) either the PRD reports allComplete===true (re-read POST-spawn so we
-  //       see work Copilot completed during the run), OR ralph state already
-  //       has architectApproved===true.
-  //
-  // Any other exit (non-zero, or zero-but-incomplete-PRD, or no PRD and no
-  // architect approval) preserves the state so a subsequent `omcp ralph`
-  // can resume from where it left off (crash/SIGINT/OOM recovery).
-  //
-  // NOTE: clearModeState("ralph") above deletes the same file as ralph-state
-  // (both use .omcp/state/ralph-state.json). We re-read post-spawn state
-  // to get the correct file content after Copilot may have updated it.
-  //
-  // NOTE: src/hooks/persistent-mode/index.ts also calls clearRalphState at
-  // three specific conditional points:
-  //   - line 122-123: architectApproved detected in Stop context text (fresh)
-  //   - line 133:     architectApproved was already set in a prior iteration
-  //   - line 143:     allComplete branch (PRD fully done)
-  // Those call sites are the CORRECT conditional paths and must NOT be
-  // modified. Only the snapshot-timing bug here (mode.ts) is fixed in v1.4.
   if (opts.mode === "ralph") {
-    const ralphExitCode = result.status ?? 1;
-    if (ralphExitCode !== 0) {
-      // Non-zero exit (crash/SIGINT/OOM): restore pre-spawn snapshot so the
-      // user can resume from where the iteration started.
-      if (preSpawnRalphSnapshot) {
-        writeRalphState(preSpawnRalphSnapshot);
+    // v1.6 input validation: maxOuterIterations <= 0 would either skip the
+    // loop body entirely (silent zero-work) or invert termination logic.
+    // Clamp to at least 1 so the user always gets a single spawn at minimum
+    // even if they pass --max-iterations 0 by mistake.
+    const rawMaxOuter = opts.maxOuterIterations ?? 20;
+    const maxOuter = Math.max(1, rawMaxOuter);
+    let iteration = 1;
+    // Initialize result with a placeholder; the loop must always run at
+    // least once and assign it. TypeScript can't see through the loop
+    // invariant, so we seed it.
+    result = {
+      status: 0,
+      pid: 0,
+      signal: null,
+      output: [],
+      stdout: "",
+      stderr: "",
+    } as ReturnType<typeof spawnSyncCrossPlatform>;
+
+    while (iteration <= maxOuter) {
+      // Stamp ralph state with current iteration. outerLoopOwned=true
+      // is the dedup flag: if upstream pwsh ever fixes the dispatch
+      // bug and Stop hooks fire again, checkRalph sees this flag and
+      // returns noop instead of also incrementing.
+      writeRalphState({
+        active: true,
+        iteration,
+        lastFiredAt: new Date().toISOString(),
+        prompt: opts.task,
+        prdPath: opts.prdPath,
+        architectApproved: preSpawnRalphSnapshot?.architectApproved,
+        outerLoopOwned: true,
+      });
+
+      result = spawnSyncCrossPlatform("copilot", args, {
+        stdio: "inherit",
+        shell: false,
+      });
+
+      const exitCode = result.status ?? 1;
+      if (exitCode !== 0) {
+        // Non-zero exit (crash/SIGINT/OOM): restore pre-spawn snapshot
+        // (without outerLoopOwned flag, since the outer loop is exiting).
+        if (isTrackedMode) {
+          clearModeState(opts.mode as ModeName);
+        }
+        if (preSpawnRalphSnapshot) {
+          writeRalphState({
+            ...preSpawnRalphSnapshot,
+            outerLoopOwned: false,
+          });
+        }
+        break;
       }
-    } else {
-      // Clean exit: re-read POST-spawn PRD status so we see work Copilot
-      // completed during the run (Fix A, v1.4 RCA — never use the pre-spawn
-      // prdStatusSnapshot for this decision).
-      //
-      // Ralph-state itself was already wiped by clearModeState() above and
-      // is intentionally NOT re-read here: any mid-run state mutation by the
-      // Stop hook is owned by persistent-mode/index.ts (which fires inside
-      // the sync spawn and runs its own clearRalphState path). mode.ts only
-      // owns spawn-cycle housekeeping using the pre-spawn snapshot.
+
+      // Clean exit: re-read POST-spawn PRD status to see work Copilot
+      // completed during the spawn (the v1.4 Fix A semantics).
       const postRunPrd = getPrdCompletionStatus();
-      const shouldClear =
-        postRunPrd.allComplete ||
-        preSpawnRalphSnapshot?.architectApproved === true;
-      if (!shouldClear && preSpawnRalphSnapshot) {
-        // PRD not complete and no architect approval: preserve state for
-        // resume.
-        writeRalphState(preSpawnRalphSnapshot);
+      if (postRunPrd.allComplete) {
+        // Done: clear mode-state + ralph-state for clean termination.
+        if (isTrackedMode) {
+          clearModeState(opts.mode as ModeName);
+        }
+        break;
       }
-      // else: clearModeState already removed the file — done.
+      if (preSpawnRalphSnapshot?.architectApproved === true) {
+        // Architect approved in a prior iteration: same termination as
+        // PRD-complete.
+        if (isTrackedMode) {
+          clearModeState(opts.mode as ModeName);
+        }
+        break;
+      }
+
+      // PRD not complete + no architect approval: advance iteration and
+      // re-spawn. The next iteration's writeRalphState above stamps the
+      // new iteration value, and Copilot picks up the same task.
+      //
+      // v1.6 architect finding M3: clearModeState was moved OUT of the
+      // per-iteration body — running it each iteration deleted the mutual-
+      // exclusion lock file between spawns, allowing concurrent modes to
+      // start during the gap. Now clearModeState runs ONLY on termination
+      // (allComplete / approved / non-zero exit / max-exhaustion below),
+      // not between iterations.
+      iteration++;
+    }
+
+    // If loop exhausted maxOuter without completing, preserve state for
+    // resume so the user can `omcp ralph --resume` later. Clear mode-state
+    // since the run is over.
+    if (iteration > maxOuter) {
+      if (isTrackedMode) {
+        clearModeState(opts.mode as ModeName);
+      }
+      // Preserve ralph-state at maxOuter so --resume can pick up.
+      writeRalphState({
+        active: true,
+        iteration: maxOuter,
+        lastFiredAt: new Date().toISOString(),
+        prompt: opts.task,
+        prdPath: opts.prdPath,
+        architectApproved: preSpawnRalphSnapshot?.architectApproved,
+        outerLoopOwned: false,
+      });
+    }
+  } else {
+    // Non-ralph modes: single spawn (pre-v1.6 behavior).
+    result = spawnSyncCrossPlatform("copilot", args, {
+      stdio: "inherit",
+      shell: false,
+    });
+    if (isTrackedMode) {
+      clearModeState(opts.mode as ModeName);
     }
   }
 

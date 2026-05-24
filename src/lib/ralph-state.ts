@@ -49,6 +49,16 @@ export interface RalphState {
    * needless re-verification.
    */
   architectApproved?: boolean;
+  /**
+   * v1.6: when true, mode.ts owns iteration advancement via its outer
+   * while-loop that re-spawns copilot between iterations. The Stop hook's
+   * checkRalph handler MUST defer (return noop) in this case — otherwise
+   * iteration double-advances if the upstream pwsh dispatch bug ever gets
+   * fixed and Stop hooks start firing again live.
+   *
+   * Set by mode.ts before each spawn; checked by persistent-mode hook.
+   */
+  outerLoopOwned?: boolean;
 }
 
 /** A single user story inside a PRD. */
@@ -151,6 +161,9 @@ export function readRalphState(worktreeRoot?: string): RalphState | null {
     if (typeof parsed.prdPath === "string") state.prdPath = parsed.prdPath;
     if (typeof parsed.architectApproved === "boolean") {
       state.architectApproved = parsed.architectApproved;
+    }
+    if (typeof parsed.outerLoopOwned === "boolean") {
+      state.outerLoopOwned = parsed.outerLoopOwned;
     }
     return state;
   } catch {
