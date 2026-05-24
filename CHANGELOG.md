@@ -7,6 +7,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-05-25
+
+### Notable — outer-loop hardening + DEP0190 resolved + 5 of 6 v1.4 carry-forwards closed
+
+This version closes the longest-standing "kicked-can" issue in omcp: the
+DEP0190 deprecation warning during `omcp setup`, deferred since v1.5,
+finally resolved via a 3-agent multi-direction team that converged on
+the same `node + npm-cli.js` solution. Plus v1.6 critic's two
+outer-loop hardening items (M1 stall detection, M2 continuation
+context injection), plus 3 more v1.4 carry-forwards.
+
+Tag gate per user mandate: live smoke must show `iteration > 1` AND
+zero DEP0190 warnings. PASSED — see docs/smoke/v1.7-sanity-smoke.md.
+
+Tests: 1167 → 1175 passing (+8 new), 2 skipped, 0 failed (1 pre-existing
+worker-fork EPERM baseline unchanged since v0.4.0). Build: tsc clean.
+
+### Tier 1 — outer-loop hardening (v1.6 critic findings)
+
+- `a5925c4` **feat(mode): v1.7 M1 outer-loop stall detection**.
+  v1.6 critic finding M1: outer loop had no "if 0 PRD progress in N
+  consecutive iterations, bail" circuit breaker. v1.7 adds
+  `stallBailAfter` option (default 2, clamped >= 1), `--stall-bail-after`
+  CLI flag, prevCompleted tracker. After N stalls → bail with state
+  preserved at current iteration + outerLoopOwned:false. 2 deterministic
+  tests (stall fires correctly, clamp works).
+
+- `1c87906` **feat(mode): v1.7 M2 outer-loop continuation context injection**.
+  v1.6 critic finding M2: iteration 2+ spawns cold-started Copilot with
+  the same prompt, ~2x token cost vs. in-session --autopilot continuation.
+  v1.7 injects getRalphContext (progress.txt + PRD status + next-story
+  prompt) wrapped in `<ralph-continuation iteration="N">` into the -p
+  prompt of iteration 2+. Spawn args spread per iteration to prevent
+  reference-sharing bug in mock observability. 1 deterministic test
+  verifies the exact contract (first call raw, second call wrapped).
+
+### Tier 2 — multi-direction team resolved DEP0190 (longest-standing carry-forward)
+
+- `07b77f9` **fix(setup): v1.7 US-03 DEP0190 resolved via `node <npm-cli.js>`**.
+  v1.5 carry-forward deferred 2 versions. v1.7 multi-direction team: 3
+  agents dispatched in parallel (Direction A: `where npm` + absolute path;
+  Direction B: direct `node + npm-cli.js`; Direction C+D: execFile/argv0/
+  NO_WARNINGS). **All three converged on the same fix**: invoke npm via
+  `process.execPath + [npm-cli.js, ...]` to bypass the `.cmd` shim
+  entirely → no shell:true → no DEP0190. `findNpmCliJs()` helper derives
+  the path purely from `process.execPath` (no execFileSync — that would
+  re-trigger DEP0190 from the discovery layer). Fallback to shell:true
+  legacy form when npm-cli.js absent (exotic install layouts).
+  Probe artifacts at docs/probes/dep0190-direction-{a,b,cd-misc}.md
+  + bench scripts.
+
+  **Live verification**: `omcp setup` now outputs only "added 95 packages
+  in 7s" + "omcp setup complete" — zero DEP0190 lines in stderr.
+
+### Tier 2 — v1.4 carry-forward closures
+
+- `c8b1ece` **feat(doctor): v1.7 US-06 stale hook commands check**.
+  v1.4 RCA carry-forward (the L1.2 wrapper-script revert scenario):
+  doctor check 10 scans settings.json __omcp-owned hook entries,
+  extracts script paths via `node "(...)"`regex, existsSync-checks,
+  warns with sample + "run `omcp setup`" suggestion. User-authored
+  hooks NOT flagged (scope gated on __omcp:true). 9 deterministic
+  tests including the exact v1.4 RCA shape, truncated-sample at >3
+  stale, invalid JSON, user-authored skip.
+
+- `7c762e7` **refactor(mode): v1.7 US-07 drop redundant --allow-all-tools
+  for looping modes**. v1.4 tidy-up: --yolo (added v1.4 for
+  LOOPING_MODES) implies --allow-all-tools per Copilot docs. v1.7
+  gates --allow-all-tools push on `!LOOPING_MODES.has(mode)`. One-shot
+  modes (no --yolo) preserve --allow-all-tools. 2 regression tests
+  pin both directions.
+
+- `2202640` **feat(setup): v1.7 US-04 prefer `npm ci` when lockfile exists**.
+  v1.5 critic M-3 carry-forward: omcp setup branches between
+  `npm install` (first run, creates lockfile) and `npm ci` (re-runs,
+  reproducible). True dev-version pinning (shipping a curated lockfile)
+  is separate v1.8 work. 1 new test (test 2b) covers ci branch.
+
+### Tier 3 — explicit ADR deferral (1 of 6 carry-forwards)
+
+- **US-05 cost-governor outer-loop equivalent — DEFERRED TO v1.8 (ADR)**.
+  The cost-governor hook subscribes to PostToolUse (per-tool-call event,
+  not per-spawn), so the v1.6 outer-loop pattern doesn't transplant
+  directly — mapping it to mode.ts post-spawn loses per-tool-call
+  granularity. This requires a separate design pass; the v1.4 carry-
+  forward continues into v1.8 with this explicit rationale, NOT a silent
+  push. Per "no kicking the can" principle, explicit ADR-deferral with
+  documented reason is allowed.
+
+### What's still pending (carry forward to v1.8.0)
+
+- **US-05 cost-governor outer-loop** (deferred from this version)
+- **6 LOOPING_MODES live verify** (autopilot, team, ultrawork, ultraqa,
+  sciomc; ralph already verified v1.6+v1.7)
+- **11 MCP server end-to-end testing** (per user mandate)
+- **19 agent QA matrix** vs omc
+- **true dev-version pinning** for plugin install (ship curated lockfile
+  via npm pack rather than first-install resolution)
+- See `docs/architecture/v1.7-to-v2.0-roadmap.md` for v1.8 + v1.9 + v2.0
+  full scope.
+
 ## [1.6.0] — 2026-05-24
 
 ### Notable — mode.ts outer-loop ralph iteration advance (live-verified)

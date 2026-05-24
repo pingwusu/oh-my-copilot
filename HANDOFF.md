@@ -1,15 +1,76 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-25 early-morning (v1.6.0 cut — mode.ts outer-loop for ralph iteration advance, LIVE-VERIFIED past gate)
+**Updated**: 2026-05-25 (v1.7.0 cut — outer-loop hardening + DEP0190 resolved + 5 of 6 v1.4 carry-forwards closed)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z v1.6.0 release commit
-**Version**: **v1.6.0** (outer-loop ralph; cut this session atop v1.5.0; FIRST tag since v1.3 with live iteration-advance proven)
-**Tests**: 1167 passing, 0 failed, 2 skipped (+11 from v1.5.0 baseline 1156, +188 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
+**Latest commit**: see `git log -1` — Phase Z v1.7.0 release commit
+**Version**: **v1.7.0** (cut this session atop v1.6.0; multi-direction team finally resolved DEP0190, deferred since v1.5)
+**Tests**: 1175 passing, 0 failed, 2 skipped (+8 from v1.6.0 baseline 1167, +196 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
 
 ---
 
-## v1.6.0 deliverables (this session)
+## v1.7.0 deliverables (this session)
+
+7 commits + tag atop v1.6.0 (095af3e):
+
+| Commit | Phase | Title |
+|---|---|---|
+| `a5925c4` | feat | feat(mode): v1.7 M1 outer-loop stall detection |
+| `1c87906` | feat | feat(mode): v1.7 M2 outer-loop continuation context injection |
+| `7c762e7` | refactor | refactor(mode): v1.7 US-07 drop redundant --allow-all-tools for looping modes |
+| `c8b1ece` | feat | feat(doctor): v1.7 US-06 stale hook commands check |
+| `2202640` | feat | feat(setup): v1.7 US-04 prefer `npm ci` when plugin lockfile exists |
+| `07b77f9` | fix | fix(setup): v1.7 US-03 DEP0190 resolved via `node <npm-cli.js>` (multi-direction team converged) |
+| (this) | Z | chore(release): v1.7.0 |
+
+Tag gate (live smoke + DEP0190 zero in real `omcp setup` output) PASSED.
+See `docs/smoke/v1.7-sanity-smoke.md`.
+
+### Approach this session: multi-direction team for DEP0190
+
+Per user 2026-05-25 mandate "尝试使用 team 不同方向直到解决，不限于三个方案" —
+DEP0190 had failed single-agent attempt in v1.5 (npm.cmd direct → status:null).
+v1.7 dispatched 3 parallel subagents at different angles:
+- Direction A (where npm + spawn absolute path): bench-explored, converged on B
+- Direction B (direct `node + npm-cli.js`): primary winner, full patch + bench
+- Direction C+D (execFile / argv0 / NO_WARNINGS): C3 = same as B, confirmed
+
+All 3 independent agents arrived at the same `node + npm-cli.js` fix. v1.7
+implementation uses pure path derivation from `process.execPath` (Direction B's
+draft used execFileSync for discovery which would have re-triggered DEP0190;
+corrected before commit).
+
+Live verification: `omcp setup` post-fix produces only "added 95 packages in 7s"
++ "omcp setup complete" — zero DEP0190 warning lines.
+
+### v1.4-v1.5-v1.6 carry-forward closure status
+
+| Carry-forward | Status in v1.7 |
+|---|---|
+| DEP0190 warning | ✅ resolved (US-03) |
+| omcp doctor stale-settings detection | ✅ added (US-06) |
+| --allow-all-tools tidy-up | ✅ done (US-07) |
+| plugin install lockfile | ✅ partial (US-04: npm ci on re-runs); true dev-pinning v1.8 |
+| outer-loop M1 stall detection | ✅ done (US-01) |
+| outer-loop M2 continuation context | ✅ done (US-02) |
+| cost-governor outer-loop equivalent | ⏸️ ADR-deferred to v1.8 (US-05) |
+| L3.6 long-run smoke on v1.6 outer-loop | ✅ replaced by v1.7 sanity smoke (live-verified iteration:2 + DEP0190 zero) |
+
+Per "no kicking the can" principle: 5 of 6 carry-forwards closed in-version;
+1 (cost-governor) explicitly ADR-deferred with documented design rationale
+(PostToolUse-per-tool granularity doesn't transplant to mode.ts post-spawn).
+
+### What ships in v1.7
+
+- Outer-loop ralph (v1.6) is now hardened with stall detection + continuation
+  context — robust enough for long-run PRDs without quality degradation
+- `omcp setup` is silent (no DEP0190 noise)
+- `omcp doctor` now catches stale settings.json entries (the v1.4 RCA scenario
+  is now detectable before runtime)
+- npm install path uses ci on re-runs for reproducibility
+- LOOPING_MODES args trimmed (one fewer redundant flag per spawn)
+
+## v1.6.0 deliverables (history)
 
 User critique driving v1.6: "为什么一直在叠加版本号，而不是在某一个版本
 解决遇到的问题" — why keep stacking version numbers instead of solving
