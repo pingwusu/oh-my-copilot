@@ -154,19 +154,55 @@ export function listActiveModes(sessionId?: string): ModeName[] {
   return out;
 }
 
+/**
+ * Default stale threshold: 60 minutes in milliseconds.
+ *
+ * Override via `OMCP_MODE_STATE_STALE_MS` env var (any positive integer).
+ * Re-read on every call so tests can override without module-level caching.
+ */
+function staleMsThreshold(): number {
+  const raw = process.env["OMCP_MODE_STATE_STALE_MS"];
+  if (raw !== undefined) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 3_600_000; // 60 minutes
+}
+
+/**
+ * Return true when the mode-state file's `started_at` timestamp is older
+ * than the configured stale threshold.
+ *
+ * A missing or unparseable `started_at` is treated as NOT stale (safe
+ * default — prefer the user runs `omcp cancel` explicitly).
+ */
+export function isModeStateStale(state: BaseModeState): boolean {
+  if (!state.started_at) return false;
+  const started = Date.parse(state.started_at);
+  if (!Number.isFinite(started)) return false;
+  return Date.now() - started > staleMsThreshold();
+}
+
 export function canStartMode(
   target: ModeName,
   sessionId?: string,
 ): {
   ok: boolean;
   conflict?: ModeName;
+  stale?: boolean;
 } {
   if (!MODE_CONFIGS[target].mutuallyExclusive) return { ok: true };
-  const active = listActiveModes(sessionId).find(
+  const activeModes = listActiveModes(sessionId);
+  const conflicting = activeModes.find(
     (m) => MODE_CONFIGS[m].mutuallyExclusive && m !== target,
   );
-  if (active) return { ok: false, conflict: active };
-  return { ok: true };
+  if (!conflicting) return { ok: true };
+
+  // Check if the conflicting mode-state is stale (older than threshold).
+  const conflictState = readModeState<BaseModeState>(conflicting, sessionId);
+  const stale = conflictState ? isModeStateStale(conflictState) : false;
+
+  return { ok: false, conflict: conflicting, stale };
 }
 
 export function isCancelled(sessionId?: string): boolean {

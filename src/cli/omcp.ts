@@ -295,7 +295,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       process.exitCode = stuck.length > 0 ? 1 : 0;
     });
 
-  // ralph gets an extra --prd option for PRD-driven execution.
+  // ralph gets extra --prd and --resume options.
   program
     .command("ralph <task...>")
     .description("Run /oh-my-copilot:ralph non-interactively against Copilot")
@@ -304,6 +304,10 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .option("--silent", "suppress stats banner from Copilot")
     .option("--max-continues <n>", "cap autopilot continuation count", (v) => Number(v))
     .option("--prd <path>", "path to PRD JSON file for story-driven execution")
+    .option(
+      "--resume",
+      "auto-clear stale mode-state (>60min old) and proceed; fails if no stale state found",
+    )
     .action(
       (
         taskParts: string[],
@@ -313,6 +317,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           silent?: boolean;
           maxContinues?: number;
           prd?: string;
+          resume?: boolean;
         },
       ) => {
         const code = runMode({
@@ -324,6 +329,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           silent: opts.silent,
           maxContinues: opts.maxContinues,
           prdPath: opts.prd,
+          resume: opts.resume,
         });
         process.exitCode = code;
       },

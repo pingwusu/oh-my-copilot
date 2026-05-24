@@ -25,10 +25,13 @@ import {
   MODE_CONFIGS,
   canStartMode,
   clearModeState,
+  readModeState,
   writeModeState,
+  isModeStateStale,
 } from "../../runtime/mode-state.js";
 import {
   writeRalphState,
+  clearRalphState,
   getPrdCompletionStatus,
   readRalphState,
 } from "../../lib/ralph-state.js";
@@ -53,6 +56,13 @@ export interface ModeOptions {
    * Mirrors omc's --interactive flag pattern. Default: false.
    */
   handoff?: boolean;
+  /**
+   * When true, auto-clear stale mode-state (older than OMCP_MODE_STATE_STALE_MS,
+   * default 60 min) and ralph-state before proceeding with a fresh run.
+   * Fails loudly if NO stale state is found — prevents silently resetting
+   * a genuinely active session. Default: false.
+   */
+  resume?: boolean;
 }
 
 // Modes that should run as a continuous loop (Copilot --autopilot keeps going
@@ -100,10 +110,69 @@ export function runMode(opts: ModeOptions): number {
   const sessionId = randomUUID();
   if (isTrackedMode) {
     const target = opts.mode as ModeName;
+
+    // --resume: handle self-resume (ralph resuming its own stale state).
+    // canStartMode does not block a mode from starting when its OWN prior
+    // state exists (m !== target exclusion). We handle that here before the
+    // mutual-exclusion check.
+    //
+    // selfResumeHandled=true means the own-state was found and processed
+    // (either cleared-stale or rejected-live). We skip the "no state found"
+    // guard below when this is true.
+    let selfResumeHandled = false;
+    if (opts.resume && MODE_CONFIGS[target].mutuallyExclusive) {
+      const ownState = readModeState(target);
+      if (ownState?.active) {
+        selfResumeHandled = true;
+        if (isModeStateStale(ownState)) {
+          clearModeState(target);
+          if (target === "ralph") clearRalphState();
+          console.error(
+            `omcp: cleared stale ${target} state (>OMCP_MODE_STATE_STALE_MS). Starting fresh run.`,
+          );
+        } else {
+          // Own state is active and NOT stale — fail loud.
+          console.error(
+            `omcp: --resume rejected — ${target} is actively running (not stale). Run 'omcp cancel' to stop it first.`,
+          );
+          return 2;
+        }
+      }
+    }
+
     const check = canStartMode(target);
     if (!check.ok) {
+      if (check.stale && opts.resume) {
+        // Stale conflict from a DIFFERENT mutually-exclusive mode + --resume.
+        clearModeState(check.conflict as ModeName);
+        if (check.conflict === "ralph") clearRalphState();
+        console.error(
+          `omcp: cleared stale ${check.conflict} state (>OMCP_MODE_STATE_STALE_MS). Starting fresh ${target} run.`,
+        );
+      } else if (check.stale && !opts.resume) {
+        // Stale conflict but no --resume: inform user about the --resume option.
+        console.error(
+          `omcp: cannot start ${target} — ${check.conflict} state is stale (started >60min ago). Run with --resume to auto-clear, or run 'omcp cancel' first.`,
+        );
+        return 2;
+      } else if (!check.stale && opts.resume) {
+        // --resume with a LIVE (non-stale) conflict — fail loud.
+        console.error(
+          `omcp: --resume rejected — ${check.conflict} is actively running (not stale). Run 'omcp cancel' to stop it first.`,
+        );
+        return 2;
+      } else {
+        // Normal conflict — no stale, no resume.
+        console.error(
+          `omcp: cannot start ${target} while ${check.conflict} is active. Run 'omcp cancel' first or wait.`,
+        );
+        return 2;
+      }
+    } else if (opts.resume && check.ok && !selfResumeHandled) {
+      // --resume but neither own state nor a conflicting state was found.
+      // There is truly nothing to resume from — fail loud.
       console.error(
-        `omcp: cannot start ${target} while ${check.conflict} is active. Run 'omcp cancel' first or wait.`,
+        `omcp: --resume rejected — no active ${target} state found to resume from. Start a fresh run without --resume.`,
       );
       return 2;
     }

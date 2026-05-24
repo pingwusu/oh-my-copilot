@@ -75,7 +75,7 @@ describe("mode-state", () => {
       iteration: 1,
       max_iterations: 10,
     } as RalphLoopState);
-    expect(canStartMode("autopilot")).toEqual({ ok: false, conflict: "ralph" });
+    expect(canStartMode("autopilot")).toMatchObject({ ok: false, conflict: "ralph" });
     expect(canStartMode("team")).toEqual({ ok: true });
   });
 
