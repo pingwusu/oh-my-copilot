@@ -232,97 +232,31 @@ team+critic verification applied per phase (same standard as v1.1, v1.2):
 - No Architect-Critic disagreement → no tie-breaker needed.
 - L3.6 smoke conducted post-Wave-A as release-verify.
 
-## v1.6.0 follow-ups (carry forward, prioritized)
+## Forward plan: v1.7 → v2.0
 
-### Tier 1 — file upstream issue + monitor
+The canonical forward plan lives in
+**[docs/architecture/v1.7-to-v2.0-roadmap.md](docs/architecture/v1.7-to-v2.0-roadmap.md)**.
 
-1. **File the upstream Copilot pwsh dispatch issue** at
-   github.com/github/copilot-cli. Issue body draft is ready in
-   docs/upstream-reports/copilot-pwsh-dispatch-v1.5-investigation.md
-   Part 4. Cites related issues #2540, #2585, #3063, #1680, #2355.
-   Reference the 4 bench scripts at
-   docs/probes/copilot-pwsh-dispatch/test-*.cjs so the Copilot team
-   has a reproduction harness.
-2. **L3.6 long-run live smoke re-run** after upstream fix lands. Until
-   then, `omcp doctor` is the user-facing detection signal — the
-   end-to-end ralph behavior is correct because of mode.ts post-spawn
-   re-read fallback.
+That doc consolidates:
+- Per-version scope (v1.7, v1.8, v1.9, v2.0)
+- Tag gates per version (live-evidence-based, no version bumping for
+  upstream-blocked items)
+- Operating principles user codified 2026-05-25
+  (no kicking-the-can; multi-direction team for stuck problems;
+  deterministic vitest primary, smoke as cross-check)
+- Decisions locked 2026-05-25:
+  - Cross-platform deferred to post-v2.0 (v2.0 = Windows-first)
+  - sparkshell .exe wrapper builds in v1.9 regardless of upstream fix
+    status (两条腿走路)
+  - Upstream pwsh dispatch issue filing handled by user, not omcp
+    track
 
-### Tier 2 — polish identified by v1.5 audits
+HANDOFF and CHANGELOG remain retrospective (per-version deliverable
+snapshots); the roadmap is the only doc to update when planning
+the next milestone.
 
-3. **DEP0190 warning during `omcp setup`** — `shell: process.platform
-   === "win32"` triggers Node 24's deprecation warning. Resolution
-   path: resolve npm.cmd to absolute path via `where npm` or via
-   `npm_execpath`, drop shell:true. Attempted in this session but
-   Node spawn semantics for direct `.cmd` invocation are fragile;
-   needs deeper investigation.
-4. **package-lock.json at plugin install path** — currently the
-   minimal runtime manifest uses caret ranges with no lockfile, so
-   floating-version drift is possible. Ship `package-lock.json`
-   alongside the minimal manifest and use `--frozen-lockfile` for
-   reproducible installs.
-5. **Stream/incremental log scan** — currently readLogTail reads the
-   last 512 KB into memory. For very long sessions (10+ MB logs) this
-   is fine, but a streaming regex scan with `createReadStream` +
-   early-abort would be more memory-efficient.
-
-### Tier 3 — still-deferred smoke gates
-
-### Tier 1 — release-verify of v1.4 fixes against real Copilot
-
-1. **L3.6 long-run live smoke (re-run on v1.4)**: deterministic tests
-   cover the housekeeping + Stop-payload + iteration-advance paths
-   (1112 tests green). A live re-run with rebuilt dist/ + refreshed
-   settings.json would confirm end-to-end behavior on real Copilot
-   1.0.53-2. Run same 10-story PRD from v1.3.0's L3.6 artifact; assert
-   ralph-state cleared + iteration counter visible across the loop.
-2. **L1.3 compaction advise live verification**: now that Stop hooks
-   actually deliver, re-trigger above-threshold context utilization
-   and confirm the compaction advise text reaches the model context.
-
-### Tier 2 — remaining deferrals (still open from v1.2/v1.3)
-
-3. **L2.4 verify-phase live smoke**.
-4. **L2.9 team multi-agent live smoke**.
-5. **Upstream Windows pwsh dispatch bug**: the secondary `eval_stdin`
-   issue identified in the v1.4 trace investigation (Copilot 1.0.52-4
-   pwsh executor strips script path on multi-arg commands). Unconfirmed
-   whether 1.0.53-2 fixed it. File upstream issue ONLY if reproducible
-   after settings.json refresh.
-
-### Tier 3 — refinements identified by v1.4 investigations
-
-6. **Replace `--allow-all-tools` with `--yolo` for looping modes** (tidy-up):
-   `mode.ts:239` unconditionally pushes `--allow-all-tools`; `--yolo`
-   added in v1.4 supersedes it for looping modes. Consolidating saves
-   one arg. Non-blocking — both forms are valid.
-7. **camelCase/PascalCase event format follow-ups**: `HookContext.payload`
-   now carries the raw stdin payload (v1.4); could extract additional
-   event-specific fields if needed (e.g. `transcript_path` for
-   SessionEnd, `tool_name` for PostToolUseFailure).
-8. **`omcp doctor` stale-settings detection**: detect entries in
-   `~/.copilot/settings.json` that reference missing handler scripts;
-   emit a warning + suggest `omcp setup` to refresh. Would have caught
-   the stale-dispatch-script scenario that produced the L3.6 smoke's
-   exit-1 errors before runtime.
-
-### Tier 3 — feature deepening
-
-7. **`fixing` phase auto-resolution** — v1.3.0 detects + writes
-   `conflicts.json`, but resolution is manual. Add a `omcp team-resolve` verb
-   that reads conflicts.json + offers strategies (winner-takes-all, retry
-   losing worker, etc.).
-8. **HUD column 6 (note)** — surface stale-state warnings, recent error,
-   `omcp doctor` status, etc.
-9. **HUD cost/tokens columns** — gated on cost-governor hook actually
-   delivering through the upstream-bug-affected PostToolUse path; v1.4 should
-   move cost-governor to Stop-side delivery same as L1.3 did for compaction.
-
-### Tier 4 — infrastructure / product
-
-10. **Marketplace publish** + auto-update flow + user-facing docs.
-11. **`npm pack && npm install -g <.tgz>` CI gate**.
-12. **Daemon mode (Option O-B)** + **modifiedArgs surgeon (Phase 7)** — user-demand gated.
+Per-version sections below (`## vN.0 deliverables (history)`) stay
+as point-in-time records of what each release shipped.
 
 ---
 
