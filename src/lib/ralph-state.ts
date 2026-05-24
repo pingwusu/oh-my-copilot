@@ -319,12 +319,78 @@ export function readProgressNotes(worktreeRoot?: string): string {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Progress-file size cap
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Maximum allowed byte size for `progress.txt`.
+ *
+ * Reads `OMCP_PROGRESS_MAX_BYTES` from the environment; falls back to 64 KiB.
+ * The value is intentionally re-read on every call so tests can override it
+ * without module-level caching.
+ */
+function progressCapBytes(): number {
+  const raw = process.env["OMCP_PROGRESS_MAX_BYTES"];
+  if (raw !== undefined) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 65536; // 64 KiB default
+}
+
+/**
+ * Truncate `content` to at most `capBytes` bytes, preserving whole entries.
+ *
+ * Entries are delimited by lines that start with `##`. When the content
+ * exceeds `capBytes`, the function finds the earliest `##` header boundary
+ * that keeps the remaining content within the cap and discards everything
+ * before it. If a single entry is itself larger than `capBytes`, the tail
+ * `capBytes` bytes of that entry are returned (still bounded).
+ */
+export function truncateProgressContent(
+  content: string,
+  capBytes: number,
+): string {
+  const buf = Buffer.from(content, "utf-8");
+  if (buf.byteLength <= capBytes) return content;
+
+  // Walk forward through `##` entry boundaries and find the first one whose
+  // tail fits within capBytes.
+  const lines = content.split("\n");
+  let byteOffset = 0;
+  let cutByteOffset = -1; // byte position of the best `##` boundary found
+
+  for (let i = 0; i < lines.length; i++) {
+    const lineBytes = Buffer.byteLength(lines[i]!, "utf-8") + 1; // +1 for \n
+    if (lines[i]!.startsWith("##")) {
+      const remaining = buf.byteLength - byteOffset;
+      if (remaining <= capBytes) {
+        cutByteOffset = byteOffset;
+        break;
+      }
+    }
+    byteOffset += lineBytes;
+  }
+
+  if (cutByteOffset >= 0) {
+    return buf.subarray(cutByteOffset).toString("utf-8");
+  }
+
+  // No `##` boundary found that fits — return the raw tail bytes.
+  return buf.subarray(buf.byteLength - capBytes).toString("utf-8");
+}
+
 /**
  * Append a free-form progress entry to `.omcp/progress.txt`.
  *
  * The entry is prefixed with a header containing the ISO timestamp and an
  * optional story id, followed by the entry body and a blank-line
  * separator. Returns false if the write fails.
+ *
+ * After appending, the file is truncated to the configured cap
+ * (`OMCP_PROGRESS_MAX_BYTES` env var, default 64 KiB) by dropping the
+ * oldest whole entries first (rolling-tail behaviour).
  */
 export function appendProgressNote(
   entry: string,
@@ -343,7 +409,8 @@ export function appendProgressNote(
       : `## ${new Date().toISOString()}`;
     const next = `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}${header}\n${entry}\n\n`;
 
-    atomicWriteFileSync(file, next);
+    const capped = truncateProgressContent(next, progressCapBytes());
+    atomicWriteFileSync(file, capped);
     return true;
   } catch {
     return false;
