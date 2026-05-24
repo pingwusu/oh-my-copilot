@@ -202,6 +202,104 @@ export function stopTeam(
   return { sessionId, killed, errors };
 }
 
+// ─── shutdown ack protocol ───────────────────────────────────────────────────
+
+export interface ShutdownReport extends TeamStopReport {
+  /** Workers that acknowledged shutdown gracefully (wrote ack file). */
+  acked: number[];
+  /** Workers that timed out and were SIGTERM'd via stopTeam fallback. */
+  timedOut: number[];
+}
+
+/**
+ * Graceful shutdown with ack protocol.
+ *
+ * 1. Writes `.omcp/state/team/<sessionId>/shutdown-request.json` with timestamp.
+ * 2. Waits up to `timeoutMs` (default: OMCP_TEAM_SHUTDOWN_WAIT_MS env or 30000)
+ *    for each worker to write `worker-K-ack.json` indicating shutdown_response.
+ * 3. Workers that do not ack within the timeout fall through to SIGTERM via
+ *    the existing pidfile-based stopTeam path.
+ *
+ * Worker-side ack-write is OUT OF SCOPE for this commit (lives in Copilot skill
+ * prompts, future work).
+ * TODO: worker-side ack writer — Copilot skill responsibility, post-L2.7
+ *
+ * @param sessionId  The team session to shut down.
+ * @param opts       Test hooks: override killProcess, timeoutMs, now(), sleep().
+ */
+export function shutdownTeam(
+  sessionId: string,
+  opts: {
+    /** Test hook: override process killer. Defaults to platform SIGTERM/taskkill. */
+    killProcess?: (pid: number) => void;
+    /** Override shutdown wait timeout in ms. Falls back to OMCP_TEAM_SHUTDOWN_WAIT_MS or 30000. */
+    timeoutMs?: number;
+    /** Test hook: override Date.now() for deterministic time checks. */
+    now?: () => number;
+    /** Test hook: synchronous sleep function (ms). Defaults to a tight busy-poll. */
+    sleep?: (ms: number) => void;
+  } = {},
+): ShutdownReport {
+  const timeoutMs =
+    opts.timeoutMs ??
+    (Number(process.env.OMCP_TEAM_SHUTDOWN_WAIT_MS ?? "30000") || 30000);
+  const now = opts.now ?? (() => Date.now());
+  const sleep =
+    opts.sleep ??
+    ((ms: number) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        // intentional busy-wait — shutdownTeam is called interactively, not in
+        // a tight loop. Acceptable for up to a few hundred ms per tick.
+      }
+    });
+
+  const pidDir = join(process.cwd(), ".omcp", "state", "team", sessionId);
+
+  // Write shutdown request marker (create pidDir if needed — e.g. tmux sessions
+  // don't create it, but we still want the request marker on disk).
+  mkdirSync(pidDir, { recursive: true });
+  atomicWriteFileSync(
+    join(pidDir, "shutdown-request.json"),
+    JSON.stringify({ requested_at: new Date().toISOString(), sessionId }, null, 2),
+  );
+
+  // Collect the worker indices from pidfiles so we know which ack files to wait for.
+  const workerIndices: number[] = [];
+  if (existsSync(pidDir)) {
+    for (const f of readdirSync(pidDir)) {
+      const m = /^worker-(\d+)\.pid$/.exec(f);
+      if (m) workerIndices.push(Number(m[1]));
+    }
+  }
+
+  // Wait for each worker to write their ack file.
+  const acked: number[] = [];
+  const timedOut: number[] = [];
+  const deadline = now() + timeoutMs;
+
+  for (const idx of workerIndices) {
+    const ackFile = join(pidDir, `worker-${idx}-ack.json`);
+    while (!existsSync(ackFile) && now() < deadline) {
+      sleep(100);
+    }
+    if (existsSync(ackFile)) {
+      acked.push(idx);
+    } else {
+      timedOut.push(idx);
+    }
+  }
+
+  // Fall through to SIGTERM for any workers that did not ack.
+  const stopReport = stopTeam(sessionId, { killProcess: opts.killProcess });
+
+  return {
+    ...stopReport,
+    acked,
+    timedOut,
+  };
+}
+
 // ─── merge-shards subcommand ──────────────────────────────────────────────────
 
 export interface TeamMergeResult {
