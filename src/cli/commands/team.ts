@@ -25,7 +25,7 @@ import { join } from "node:path";
 
 import { mergeShards } from "../../lib/team-shard-state.js";
 import type { MergeReport } from "../../lib/team-shard-state.js";
-import { writeModeState } from "../../runtime/mode-state.js";
+import { writeModeState, transitionPhase } from "../../runtime/mode-state.js";
 import type { TeamState } from "../../runtime/mode-state.js";
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 
@@ -68,8 +68,10 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
   const logDir = join(process.cwd(), ".omcp", "state", "sessions", sessionId);
   mkdirSync(logDir, { recursive: true });
 
-  // Write TeamState with current_phase='executing' before spawning workers so
-  // that readModeState('team') is available immediately after this call returns.
+  // Write TeamState with current_phase='initializing' BEFORE spawning workers.
+  // Once all workers are spawned, transitionPhase moves to 'executing'.
+  // This corrects the L2.5a schema (which wrote 'executing' prematurely) so
+  // the phase accurately reflects: spawn is not yet complete at this point.
   writeModeState<TeamState>("team", {
     active: true,
     session_id: sessionId,
@@ -81,8 +83,8 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
       agent: spec.agent,
       status: "pending",
     })),
-    current_phase: "executing",
-    stage_history: ["initializing", "executing"],
+    current_phase: "initializing",
+    stage_history: ["initializing"],
   }, sessionId);
 
   if (tmuxAvailable()) {
@@ -104,6 +106,8 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
     spawnSync("tmux", ["select-layout", "-t", sessionName, "tiled"], {
       stdio: "inherit",
     });
+    // Spawn complete — transition from 'initializing' to 'executing'.
+    transitionPhase(sessionId, "executing");
     return { sessionId, count: spec.count, agent: spec.agent, mode: "tmux", logDir };
   }
 
@@ -124,6 +128,8 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
       atomicWriteFileSync(join(pidDir, `worker-${i + 1}.pid`), String(child.pid));
     }
   }
+  // All workers spawned — transition from 'initializing' to 'executing'.
+  transitionPhase(sessionId, "executing");
   return {
     sessionId,
     count: spec.count,

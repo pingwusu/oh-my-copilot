@@ -205,6 +205,88 @@ export function canStartMode(
   return { ok: false, conflict: conflicting, stale };
 }
 
+// ─── valid phase transitions ──────────────────────────────────────────────────
+
+/**
+ * Allowed phase transitions for the TeamPhase state machine.
+ *
+ * 'fixing' is reserved per the phase enum (mirrored from omc) but has no
+ * incoming transitions in v1.2.0 — a worker reassignment path would add one.
+ * TODO: add 'executing' → 'fixing' transition when worker-reassignment lands (post-L2.6)
+ */
+const VALID_TEAM_TRANSITIONS: ReadonlyMap<TeamPhase, ReadonlySet<TeamPhase>> =
+  new Map([
+    ["initializing", new Set<TeamPhase>(["planning", "executing", "failed"])],
+    ["planning", new Set<TeamPhase>(["executing", "failed"])],
+    ["executing", new Set<TeamPhase>(["completed", "failed"])],
+    // 'fixing' has no incoming edges in v1.2.0 — reserved for reassignment UX
+    ["fixing", new Set<TeamPhase>(["completed", "failed"])],
+    ["completed", new Set<TeamPhase>()],
+    ["failed", new Set<TeamPhase>()],
+  ]);
+
+export class InvalidPhaseTransitionError extends Error {
+  constructor(from: TeamPhase, to: TeamPhase) {
+    super(
+      `invalid TeamPhase transition: '${from}' → '${to}' is not allowed`,
+    );
+    this.name = "InvalidPhaseTransitionError";
+  }
+}
+
+export interface PhaseTransitionRecord {
+  from: TeamPhase;
+  to: TeamPhase;
+  at: string;
+  reason?: string;
+}
+
+/**
+ * Atomically transition a TeamState's current_phase and append a record to
+ * stage_history.  Reads the existing state from disk, validates the transition,
+ * writes back via atomicWriteFileSync, and returns the updated state.
+ *
+ * Throws {@link InvalidPhaseTransitionError} if the transition is not in the
+ * allowed set.  Throws if no TeamState exists for the given sessionId.
+ */
+export function transitionPhase(
+  sessionId: string,
+  to: TeamPhase,
+  /** Optional annotation stored for observability; currently logged but not persisted to stage_history (which is TeamPhase[]). */
+  _reason?: string,
+): TeamState {
+  const state = readModeState<TeamState>("team", sessionId);
+  if (state === null) {
+    throw new Error(
+      `transitionPhase: no TeamState found for session '${sessionId}'`,
+    );
+  }
+
+  // Default to 'executing' for back-compat: v1.0.0 states without current_phase
+  // were always in the executing phase (L2.5a always wrote 'executing' before
+  // the transitionPhase helper existed).
+  const from: TeamPhase = state.current_phase ?? "executing";
+  const allowed = VALID_TEAM_TRANSITIONS.get(from);
+  if (!allowed || !allowed.has(to)) {
+    throw new InvalidPhaseTransitionError(from, to);
+  }
+
+  // Ensure the history chain includes the current 'from' phase if not already
+  // present (back-compat with states written before transitionPhase existed).
+  const existingHistory = state.stage_history ?? [];
+  const baseHistory =
+    existingHistory.length > 0 ? existingHistory : [from];
+
+  const updated: TeamState = {
+    ...state,
+    current_phase: to,
+    stage_history: [...baseHistory, to],
+  };
+
+  writeModeState<TeamState>("team", updated, sessionId);
+  return updated;
+}
+
 export function isCancelled(sessionId?: string): boolean {
   return existsSync(join(stateRoot(sessionId), "cancel.json"));
 }
