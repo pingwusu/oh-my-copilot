@@ -29,7 +29,8 @@ import {
 } from "../../runtime/mode-state.js";
 import {
   writeRalphState,
-  clearRalphState,
+  getPrdCompletionStatus,
+  readRalphState,
 } from "../../lib/ralph-state.js";
 import { readBoulderState } from "../../lib/boulder-state.js";
 import { registerRalplan } from "../../ralplan/index.js";
@@ -87,6 +88,13 @@ export function runMode(opts: ModeOptions): number {
     return 0;
   }
 
+  // Ralph-specific: read prior state BEFORE writeModeState overwrites the
+  // shared .omcp/state/ralph-state.json file. We need architectApproved from
+  // any previous iteration to carry it forward into the fresh state write
+  // below, and to inform the post-exit conditional clear decision.
+  const priorRalphState =
+    opts.mode === "ralph" ? readRalphState() : null;
+
   // Mode-state tracking + mutual-exclusion check for known modes.
   const isTrackedMode = opts.mode in MODE_CONFIGS;
   const sessionId = randomUUID();
@@ -109,6 +117,8 @@ export function runMode(opts: ModeOptions): number {
 
   // Ralph-specific: write ralph-state before spawning so the persistent-mode
   // hook and skills can read iteration/prdPath on every Stop event.
+  // Carry forward architectApproved from any prior state so the conditional
+  // clear logic (post-exit) can detect it even after a fresh write.
   if (opts.mode === "ralph") {
     writeRalphState({
       active: true,
@@ -116,6 +126,9 @@ export function runMode(opts: ModeOptions): number {
       lastFiredAt: new Date().toISOString(),
       prompt: opts.task,
       ...(opts.prdPath ? { prdPath: opts.prdPath } : {}),
+      ...(priorRalphState?.architectApproved
+        ? { architectApproved: true }
+        : {}),
     });
   }
 
@@ -167,6 +180,15 @@ export function runMode(opts: ModeOptions): number {
     // One-shot modes don't get --autopilot.
   }
 
+  // Ralph-specific: snapshot ralph-state and PRD status BEFORE clearModeState
+  // wipes .omcp/state/ralph-state.json (mode-state and ralph-state share the
+  // same file — clearModeState("ralph") would otherwise erase ralph-state).
+  // We capture what we need here, then restore if we should preserve state.
+  const ralphSnapshot =
+    opts.mode === "ralph" ? readRalphState() : null;
+  const prdStatusSnapshot =
+    opts.mode === "ralph" ? getPrdCompletionStatus() : null;
+
   const result = spawnSyncCrossPlatform("copilot", args, {
     stdio: "inherit",
     shell: false,
@@ -176,9 +198,44 @@ export function runMode(opts: ModeOptions): number {
     clearModeState(opts.mode as ModeName);
   }
 
-  // Ralph-specific: clear ralph-state after copilot exits.
-  if (opts.mode === "ralph") {
-    clearRalphState();
+  // Ralph-specific: conditionally clear ralph-state after copilot exits.
+  //
+  // Only clear if BOTH conditions hold:
+  //   (a) copilot exited with status 0, AND
+  //   (b) either the PRD reports allComplete===true, OR ralph state already
+  //       has architectApproved===true from a prior iteration.
+  //
+  // Any other exit (non-zero, or zero-but-incomplete-PRD, or no PRD and no
+  // architect approval) preserves the state so a subsequent `omcp ralph`
+  // can resume from where it left off (crash/SIGINT/OOM recovery).
+  //
+  // NOTE: clearModeState("ralph") above deletes the same file as ralph-state
+  // (both use .omcp/state/ralph-state.json). We captured the pre-exit snapshot
+  // above and restore it here when preservation is required.
+  //
+  // NOTE: src/hooks/persistent-mode/index.ts also calls clearRalphState at
+  // three specific conditional points:
+  //   - line 122-123: architectApproved detected in Stop context text (fresh)
+  //   - line 133:     architectApproved was already set in a prior iteration
+  //   - line 143:     allComplete branch (PRD fully done)
+  // Those call sites are the CORRECT conditional paths and must NOT be
+  // modified. Only the unconditional call here (mode.ts) is the bug being
+  // fixed in Phase L3.3.
+  if (opts.mode === "ralph" && ralphSnapshot) {
+    const ralphExitCode = result.status ?? 1;
+    if (ralphExitCode === 0) {
+      const shouldClear =
+        (prdStatusSnapshot?.allComplete ?? false) ||
+        ralphSnapshot.architectApproved === true;
+      if (!shouldClear) {
+        // Restore ralph-state that was wiped by clearModeState above.
+        writeRalphState(ralphSnapshot);
+      }
+      // else: clearModeState already removed the file — done.
+    } else {
+      // Non-zero exit — restore ralph-state for crash recovery resume.
+      writeRalphState(ralphSnapshot);
+    }
   }
 
   // Ralplan-specific: register boulder state after the skill completes so the
