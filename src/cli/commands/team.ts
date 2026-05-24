@@ -25,6 +25,8 @@ import { join } from "node:path";
 
 import { mergeShards } from "../../lib/team-shard-state.js";
 import type { MergeReport } from "../../lib/team-shard-state.js";
+import { writeModeState } from "../../runtime/mode-state.js";
+import type { TeamState } from "../../runtime/mode-state.js";
 
 export interface TeamSpec {
   count: number;
@@ -64,6 +66,23 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
   const sessionId = randomUUID();
   const logDir = join(process.cwd(), ".omcp", "state", "sessions", sessionId);
   mkdirSync(logDir, { recursive: true });
+
+  // Write TeamState with current_phase='executing' before spawning workers so
+  // that readModeState('team') is available immediately after this call returns.
+  writeModeState<TeamState>("team", {
+    active: true,
+    session_id: sessionId,
+    started_at: new Date().toISOString(),
+    spawned: spec.count,
+    done: 0,
+    workers: Array.from({ length: spec.count }, (_, i) => ({
+      id: `worker-${i + 1}`,
+      agent: spec.agent,
+      status: "pending",
+    })),
+    current_phase: "executing",
+    stage_history: ["initializing", "executing"],
+  }, sessionId);
 
   if (tmuxAvailable()) {
     const sessionName = `omcp-team-${sessionId.slice(0, 8)}`;

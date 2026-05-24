@@ -304,9 +304,47 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       },
     );
 
-  // Mode launchers: `omcp autopilot "task"`, etc. (ralph is registered above).
+  // ralplan gets an extra --handoff option for boulder→ralph chain wiring.
+  program
+    .command("ralplan <task...>")
+    .description("Run /oh-my-copilot:ralplan non-interactively against Copilot")
+    .option("--family <family>", "model family: claude | gpt | auto", "auto")
+    .option("--agent <name>", "use a specific omcp agent's recommended model")
+    .option("--silent", "suppress stats banner from Copilot")
+    .option("--max-continues <n>", "cap autopilot continuation count", (v) => Number(v))
+    .option(
+      "--handoff",
+      "after ralplan exits cleanly, read boulder state and hand off to ralph (opt-in)",
+    )
+    .action(
+      (
+        taskParts: string[],
+        opts: {
+          family?: string;
+          agent?: string;
+          silent?: boolean;
+          maxContinues?: number;
+          handoff?: boolean;
+        },
+      ) => {
+        const code = runMode({
+          mode: "ralplan",
+          task: taskParts.join(" "),
+          family: opts.family as "claude" | "gpt" | "auto" | undefined,
+          agent: opts.agent,
+          agentsDir: resolve(packageRoot, "agents"),
+          silent: opts.silent,
+          maxContinues: opts.maxContinues,
+          handoff: opts.handoff,
+        });
+        process.exitCode = code;
+      },
+    );
+
+  // Mode launchers: `omcp autopilot "task"`, etc. (ralph and ralplan registered above).
   for (const mode of MODE_COMMANDS) {
     if (mode === "ralph") continue;
+    if (mode === "ralplan") continue;
     program
       .command(`${mode} <task...>`)
       .description(`Run /oh-my-copilot:${mode} non-interactively against Copilot`)

@@ -51,10 +51,23 @@ export interface AutopilotState extends BaseModeState {
   ultraqa_cycles?: number;
 }
 
+/** omc-aligned phase enum — mirrors omc src/team/phase-controller.ts:3-9. */
+export type TeamPhase =
+  | "initializing"
+  | "planning"
+  | "executing"
+  | "fixing"
+  | "completed"
+  | "failed";
+
 export interface TeamState extends BaseModeState {
   spawned: number;
   done: number;
   workers: Array<{ id: string; agent?: string; status: string }>;
+  /** Current lifecycle phase of this team session. Optional for back-compat. */
+  current_phase?: TeamPhase;
+  /** Ordered list of phases this session has passed through. Optional for back-compat. */
+  stage_history?: TeamPhase[];
 }
 
 export interface ModeConfig {

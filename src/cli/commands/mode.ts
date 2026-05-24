@@ -8,7 +8,7 @@
 // the skill emits a completion signal or the user cancels.
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import { spawnSyncCrossPlatform } from "../../runtime/resolve-executable.js";
 import { join } from "node:path";
@@ -31,6 +31,7 @@ import {
   writeRalphState,
   clearRalphState,
 } from "../../lib/ralph-state.js";
+import { readBoulderState } from "../../lib/boulder-state.js";
 import { registerRalplan } from "../../ralplan/index.js";
 
 export interface ModeOptions {
@@ -44,6 +45,13 @@ export interface ModeOptions {
   interactive?: boolean;
   maxContinues?: number;
   prdPath?: string;
+  /**
+   * When true (opt-in), after ralplan's copilot exits cleanly (status 0),
+   * read boulder state to get the plan file path written by the skill,
+   * read the plan content, and pass handOffToRalph=true to registerRalplan.
+   * Mirrors omc's --interactive flag pattern. Default: false.
+   */
+  handoff?: boolean;
 }
 
 // Modes that should run as a continuous loop (Copilot --autopilot keeps going
@@ -175,13 +183,40 @@ export function runMode(opts: ModeOptions): number {
 
   // Ralplan-specific: register boulder state after the skill completes so the
   // omc-orchestrator hook and ralph can pick up the active plan.
+  //
+  // When --handoff is set AND copilot exited cleanly (status 0), attempt to
+  // read the boulder state that the ralplan skill is expected to have written
+  // before exiting. If boulder state is present and activePlan points to a
+  // readable file, pass its content and handOffToRalph=true to registerRalplan.
+  //
+  // Race note: the skill must write boulder state BEFORE copilot exits. If it
+  // does not, readBoulderState returns null and we fall back to
+  // handOffToRalph=false silently (no crash, no partial state).
   if (opts.mode === "ralplan") {
+    const exitedClean = (result.status ?? 1) === 0;
+    let planContent = "";
+    let handOffToRalph = false;
+
+    if (opts.handoff && exitedClean) {
+      const boulder = readBoulderState(process.cwd());
+      if (boulder?.activePlan) {
+        try {
+          planContent = readFileSync(boulder.activePlan, "utf-8");
+          handOffToRalph = true;
+        } catch {
+          // Plan file unreadable — fall back to handOffToRalph=false silently.
+        }
+      }
+      // If boulder state absent, handOffToRalph remains false (skill did not
+      // populate it before exiting — see race note above).
+    }
+
     registerRalplan({
       task: opts.task,
-      planContent: "",
+      planContent,
       sessionId,
       worktreeRoot: process.cwd(),
-      handOffToRalph: false,
+      handOffToRalph,
     });
   }
 
