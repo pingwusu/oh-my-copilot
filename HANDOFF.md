@@ -1,15 +1,98 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-24 late-evening (v1.3.0 cut — UX layer (HUD) + protocol completion (worker-side ack) + L2.5b fixing-phase + first long-run smoke)
+**Updated**: 2026-05-24 night (v1.4.0 cut — housekeeping RCA closure + Copilot Stop-payload hardening + canonical --yolo + Lane 3 disputed-doc cleanup)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z v1.3.0 release commit
-**Version**: **v1.3.0** (UX + protocol completion; cut this session atop v1.2.0)
-**Tests**: 1098 passing, 0 failed, 2 skipped (+16 from v1.2.0 baseline 1082, +119 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
+**Latest commit**: see `git log -1` — Phase Z v1.4.0 release commit
+**Version**: **v1.4.0** (RCA + Stop-payload hardening + canonical --yolo; cut this session atop v1.3.0)
+**Tests**: 1133 passing, 0 failed, 2 skipped (+35 from v1.3.0 baseline 1098, +154 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
 
 ---
 
-## v1.3.0 deliverables (this session)
+## v1.4.0 deliverables (this session)
+
+8 commits + operational settings.json refresh atop v1.3.0:
+
+| Commit | Phase | Title |
+|---|---|---|
+| `3175be5` | A/B-fix | fix(mode): post-spawn state re-read closes housekeeping bug (Fix A + B, v1.4 RCA) |
+| `2612092` | docs | docs(upstream): close Lane 3 — Copilot flag investigation refutes upstream-broken claim |
+| `c0733e1` | docs | docs(handoff): archive 2026-05-24 v1.4 housekeeping RCA |
+| `3451a48` | feat | feat(mode): pass --yolo for looping modes (canonical Copilot invocation per official docs) |
+| `515b98f` | refactor | refactor(mode): remove dead postRunRalph branch from ralph clean-exit path |
+| `e8d24d7` | fix | fix(hooks): accept Copilot snake_case Stop payload + plumb raw payload via HookContext |
+| `5fac994` | fix | fix(hooks): audit-driven hook hardening — todo-continuation snake_case + extracted buildHookContextFromPayload |
+| (this) | Z | chore(release): v1.4.0 |
+
+Plus operational fix (not a commit): re-ran `omcp setup` to refresh
+`~/.copilot/settings.json` from the stale `scripts/omcp-hook-dispatch.cjs`
+form (left over from the L1.2 revert at `c7cbc21` that deleted the
+wrapper script but did not re-run setup) to the canonical
+`dist/cli/omcp.js hook fire <event> --json` form. This is the proximate
+cause of the v1.3.0 L3.6 smoke's "3/3 Stop handlers exit code 1" — the
+handlers were invoking a deleted file.
+
+Three independent root causes were identified by the v1.4 RCA, all
+present in v1.3.0, each fixed with deterministic vitest coverage:
+
+1. **mode.ts pre-spawn snapshot bug** (`3175be5`) — `prdStatusSnapshot`
+   captured before spawn was used post-exit to decide ralph-state
+   clearing. For first-run PRDs the snapshot's `allComplete` was always
+   false → `shouldClear=false` → state restored to spawn-time
+   `iteration:1`. Fix: split snapshot semantics (pre-spawn for crash
+   recovery only; clean exit re-reads `getPrdCompletionStatus()` post-
+   spawn). Test 5 (deterministic) reproduces the bug and verifies the
+   fix.
+
+2. **Stop hook payload-shape gap** (`e8d24d7`) — Copilot 1.0.53+ emits
+   Stop fields in snake_case (`session_id`, `stop_reason`,
+   `transcript_path`), but omcp read only `sessionId` (camelCase) and
+   `extractStopContext` read `ctx.toolArgs ?? ctx.toolResult` which
+   Copilot doesn't populate for Stop. Fix: `HookContext.payload?:
+   Record<string, unknown>` carries the raw stdin payload;
+   `extractStopContext` reads from `ctx.payload` first. 5 deterministic
+   tests cover Stop → ralph iteration-advance (end_turn → advance,
+   context_limit_exceeded → bail-out, PRD-complete → clear).
+
+3. **Stale settings.json** (operational, no commit) — `~/.copilot/
+   settings.json` pointed to a deleted dispatcher script. Re-ran `omcp
+   setup` to refresh all 13 hook entries to `dist/cli/omcp.js hook fire
+   <event> --json`.
+
+Plus two non-RCA cleanups:
+
+- **`--yolo` arg** (`3451a48`) — the canonical Copilot non-interactive
+  invocation per official docs is `copilot --autopilot --yolo
+  --max-autopilot-continues N -p "..."`. omcp previously pushed only
+  `--autopilot`. Adding `--yolo` matches docs and prevents mid-loop
+  permission prompts from stalling unattended runs. Per the
+  investigation doc (`copilot-yolo-flag-investigation.md`), `--yolo`
+  has no hook-dispatch effect — purely a permission preset.
+
+- **dead `postRunRalph` cleanup** (`515b98f`) — architect + critic
+  independently found that `clearModeState("ralph")` wipes the file
+  BEFORE the post-spawn re-read in 3175be5, making `postRunRalph`
+  always null. Removed the dead references; `shouldClear` simplifies
+  to two clauses.
+
+team+critic verification applied per fix (same standard as v1.1/v1.2/v1.3),
+plus an extra multi-agent release-readiness audit before tag:
+- 3175be5 (post-spawn re-read): Architect APPROVE + Critic APPROVE; both
+  flagged the dead `postRunRalph` branch as Important-not-blocker —
+  addressed in `515b98f`.
+- --yolo + dead-code + Stop-payload fix: deterministic vitest serves
+  as the primary verification; architect+critic deferred where the
+  change is mechanical or matches an already verified design.
+- Pre-tag audit (5fac994 driver): Architect + Critic + Test-engineer
+  in independent contexts each audited the full src/hooks/** for
+  v1.4.0 release readiness. All three converged on (a) todo-continuation
+  bug + (b) untestable runFireCli ctx-building. Both addressed in
+  5fac994 with 5 + 16 new deterministic tests. 1133 total tests
+  passing.
+- All commits use omc-style trailers (Constraint / Rejected /
+  Confidence / Scope-risk).
+
+## v1.3.0 deliverables (history)
 
 5 commits + 1 inline Critic-fix + 1 release commit + 1 smoke doc atop v1.2.0:
 
@@ -29,30 +112,45 @@ team+critic verification applied per phase (same standard as v1.1, v1.2):
 - No Architect-Critic disagreement → no tie-breaker needed.
 - L3.6 smoke conducted post-Wave-A as release-verify.
 
-## v1.4.0 follow-ups (carry forward, prioritized)
+## v1.5.0 follow-ups (carry forward, prioritized)
 
-### Tier 1 — housekeeping RCA (uncovered by L3.6 smoke)
+### Tier 1 — release-verify of v1.4 fixes against real Copilot
 
-1. **ralph-state iteration counter under --autopilot**: L3.6 smoke showed
-   the counter doesn't advance when Copilot completes all stories in a single
-   `--autopilot` turn. Likely interaction between `incrementRalphIteration`
-   (Stop hook) and how `--autopilot` dispatches Stop events. RCA + fix.
-2. **clearRalphState conditional path**: same smoke — state should have
-   cleared on `allComplete:true + exit 0` per L3.3 design, but didn't. Either
-   the Stop hook isn't reaching the clear branch OR the PRD allComplete state
-   isn't visible at Stop-time. RCA + test.
-3. **High-load compaction smoke**: re-run L3.6 with 30+ stories requiring
-   real edits (not trivial writes) to push context above 50% utilization +
-   verify L1.3 Stop-side advise actually delivers. Currently L3.6's 14.4%
-   utilization is below the 80% threshold so advise never fired.
+1. **L3.6 long-run live smoke (re-run on v1.4)**: deterministic tests
+   cover the housekeeping + Stop-payload + iteration-advance paths
+   (1112 tests green). A live re-run with rebuilt dist/ + refreshed
+   settings.json would confirm end-to-end behavior on real Copilot
+   1.0.53-2. Run same 10-story PRD from v1.3.0's L3.6 artifact; assert
+   ralph-state cleared + iteration counter visible across the loop.
+2. **L1.3 compaction advise live verification**: now that Stop hooks
+   actually deliver, re-trigger above-threshold context utilization
+   and confirm the compaction advise text reaches the model context.
 
-### Tier 2 — remaining v1.3 deferrals
+### Tier 2 — remaining deferrals (still open from v1.2/v1.3)
 
-4. **L2.4 verify-phase live smoke** (still deferred from v1.2.0).
-5. **L2.9 team multi-agent live smoke** (still deferred from v1.2.0).
-6. **Upstream Copilot CLI hook-dispatch bug** — file the issue at github.com/
-   github/copilot-cli using the draft at
-   `docs/upstream-reports/copilot-cli-hook-eval-stdin.md`; monitor for fix.
+3. **L2.4 verify-phase live smoke**.
+4. **L2.9 team multi-agent live smoke**.
+5. **Upstream Windows pwsh dispatch bug**: the secondary `eval_stdin`
+   issue identified in the v1.4 trace investigation (Copilot 1.0.52-4
+   pwsh executor strips script path on multi-arg commands). Unconfirmed
+   whether 1.0.53-2 fixed it. File upstream issue ONLY if reproducible
+   after settings.json refresh.
+
+### Tier 3 — refinements identified by v1.4 investigations
+
+6. **Replace `--allow-all-tools` with `--yolo` for looping modes** (tidy-up):
+   `mode.ts:239` unconditionally pushes `--allow-all-tools`; `--yolo`
+   added in v1.4 supersedes it for looping modes. Consolidating saves
+   one arg. Non-blocking — both forms are valid.
+7. **camelCase/PascalCase event format follow-ups**: `HookContext.payload`
+   now carries the raw stdin payload (v1.4); could extract additional
+   event-specific fields if needed (e.g. `transcript_path` for
+   SessionEnd, `tool_name` for PostToolUseFailure).
+8. **`omcp doctor` stale-settings detection**: detect entries in
+   `~/.copilot/settings.json` that reference missing handler scripts;
+   emit a warning + suggest `omcp setup` to refresh. Would have caught
+   the stale-dispatch-script scenario that produced the L3.6 smoke's
+   exit-1 errors before runtime.
 
 ### Tier 3 — feature deepening
 

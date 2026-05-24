@@ -7,6 +7,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-05-24
+
+### Notable — housekeeping RCA + Copilot Stop-payload hardening + canonical --yolo
+
+The v1.3.0 release artifact (L3.6 smoke) revealed that ralph-state did not
+clear and iteration did not advance after a clean 10-story completion.
+This session's deep-dive trace identified three independent root causes —
+all present in v1.3.0 — and v1.4.0 fixes each with deterministic vitest
+coverage.
+
+Tests: 1098 → 1133 passing (+35 new), 2 skipped, 0 failed (1 pre-existing
+worker-fork EPERM baseline unchanged since v0.4.0). Build: tsc clean.
+
+### Tier 1 — RCA fixes (housekeeping + iteration advance)
+
+- `3175be5` **fix(mode): post-spawn state re-read for housekeeping decision**.
+  Pre-fix, mode.ts captured `prdStatusSnapshot` BEFORE spawn (when PRD is
+  by definition incomplete for first-time runs), then used that stale
+  snapshot AFTER spawn to decide ralph-state clearing. Decision was always
+  "don't clear" → `writeRalphState(ralphSnapshot)` restored spawn-time
+  `iteration:1, active:true`. Fix splits semantics: pre-spawn snapshot
+  used ONLY for crash recovery on non-zero exit; clean exit re-reads
+  `getPrdCompletionStatus()` post-spawn. Test 5 in
+  `ralph-state-crash-recovery.integration.test.ts` deterministically
+  reproduces the bug + verifies the fix.
+
+- `515b98f` **refactor(mode): remove dead postRunRalph branch**. Architect +
+  critic independently found that `clearModeState("ralph")` wipes the file
+  BEFORE the post-spawn re-read in 3175be5, making `postRunRalph` always
+  null. Removed the dead references; `shouldClear` simplifies to two
+  clauses.
+
+- `3451a48` **feat(mode): pass --yolo for looping modes**. Per official
+  Copilot docs, the canonical non-interactive invocation is
+  `copilot --autopilot --yolo --max-autopilot-continues N -p "..."`. omcp
+  previously pushed only `--autopilot`. Adding `--yolo` matches docs and
+  prevents mid-loop permission prompts from stalling unattended runs.
+  Verified to have NO hook-dispatch effect (per
+  `docs/upstream-reports/copilot-yolo-flag-investigation.md`); this commit
+  closes the canonical-invocation gap. 8 deterministic tests in
+  `runMode-args-yolo.integration.test.ts` assert --yolo presence per
+  looping mode and absence in one-shot modes.
+
+- `e8d24d7` **fix(hooks): accept Copilot snake_case Stop payload + raw
+  payload via HookContext**. Trace investigation revealed Copilot 1.0.53+
+  emits Stop fields in snake_case (`session_id`, `stop_reason`,
+  `transcript_path`), but omcp's `runFireCli` read only `sessionId`
+  (camelCase) and `extractStopContext` read `ctx.toolArgs ?? ctx.toolResult`
+  (Copilot does NOT populate these for Stop events). Result: empty
+  StopContext → isContextLimitStop/isRateLimitStop guards blind to real
+  stop_reason. Harmless for "end_turn" but latent for context_limit /
+  rate_limit reasons. Fix adds `payload?: Record<string, unknown>` to
+  HookContext, plumbs the raw stdin payload through `runFireCli`, accepts
+  both `sessionId` and `session_id` for session-id extraction, and updates
+  `extractStopContext` to read `ctx.payload ?? ctx.toolArgs ?? ctx.toolResult`.
+  5 deterministic tests in `stop-hook-iteration-advance.integration.test.ts`
+  cover Stop → ralph iteration-advance (end_turn → advance,
+  context_limit_exceeded → bail-out, PRD-complete → clear, legacy ctx
+  without payload → toolArgs fallback).
+
+- `5fac994` **fix(hooks): audit-driven hook hardening**. Pre-tag multi-
+  agent release-readiness audit (architect + critic + test-engineer,
+  three independent contexts) converged on two findings: (a) the same
+  v1.4 snake_case Stop payload bug existed in `todo-continuation/index.ts:39`
+  — the persistent-mode fix was not propagated to its sibling, leaving
+  bail-out guards (isContextLimitStop, isRateLimitStop, isAuthenticationError)
+  blind to real Copilot stop_reason and risking infinite todo-continuation
+  loops on context-exhausted Stop events; (b) `runFireCli` ctx-building
+  logic (the v1.4 fix site itself) was inline and untestable. Fix (a):
+  mirror persistent-mode's `extractStopContext` pattern in todo-continuation;
+  5 new deterministic tests cover real Copilot payload bail-out paths.
+  Fix (b): extract `buildHookContextFromPayload(rawPayload, fallbackCwd)`
+  as exported pure function; 16 new deterministic tests cover sessionId
+  snake_case/camelCase extraction precedence, cwd fallback, raw payload
+  preservation, tool* field mapping, and a verbatim Copilot log-line-1507
+  regression case.
+
+### Tier 1 — operational (no commit)
+
+- `omcp setup` re-run: refreshes `~/.copilot/settings.json` from the stale
+  `scripts/omcp-hook-dispatch.cjs` form (left over from the L1.2 revert at
+  `c7cbc21` that deleted the wrapper script without re-running setup) to
+  the canonical `dist/cli/omcp.js hook fire <event> --json` form. This is
+  the proximate cause of the v1.3.0 L3.6 smoke's "3/3 Stop handlers exit
+  code 1" — handlers were invoking a deleted file (MODULE_NOT_FOUND →
+  exit 1 → Copilot surfaces as `HookExitCodeError: code 1`).
+
+### Tier 2 — Lane 3 closure (disputed-doc cleanup)
+
+- `2612092` **docs(upstream): close Lane 3** — the v1.3.0 session's
+  "Copilot 1.0.53-1 broke Stop hook dispatch upstream" claim is DISPUTED.
+  `HookExitCodeError: code 1` literally means the handler RAN and exited
+  1 (not that Copilot failed to dispatch). The previous session's
+  evidence cannot distinguish upstream-broken from omcp-handler-exits-1;
+  the latter is the actual cause (see e8d24d7 trace artifact + stale
+  settings.json). Delete `docs/upstream-reports/L1.3-reassessment-2026-05-24.md`
+  (premise refuted); revert append on `copilot-cli-hook-eval-stdin.md`
+  (Stop+SessionEnd upstream-broken claim insufficiently supported); add
+  `docs/upstream-reports/copilot-yolo-flag-investigation.md` (full
+  investigation cited from official docs + live bundle inspection).
+
+### Tier 2 — handoff archive
+
+- `c0733e1` **docs(handoff): archive 2026-05-24 v1.4 housekeeping RCA**.
+  Snapshot from prior session documenting the housekeeping bug RCA + user
+  standards (deterministic vitest > smoke, team+critic per fix, multi-
+  subagent cross-verification, read upstream docs before blaming upstream).
+
+### What's still pending (carry forward to v1.5.0)
+
+- **L3.6 long-run live smoke re-run on v1.4**: deterministic tests cover
+  the housekeeping + Stop-payload + iteration-advance paths (1112 tests
+  green). A live re-run with rebuilt dist/ + refreshed settings.json
+  would confirm end-to-end behavior on real Copilot 1.0.53-2.
+- **L1.3 compaction-advise live verification**: now that Stop hooks
+  actually deliver, re-trigger above-threshold context utilization and
+  confirm compaction advise text reaches the model context.
+- **L2.4 verify-phase live smoke** (still deferred).
+- **L2.9 team multi-agent live smoke** (still deferred).
+- **Upstream Windows pwsh dispatch bug**: secondary issue from the v1.4
+  trace investigation (Copilot 1.0.52-4 pwsh executor strips script path
+  on multi-arg commands). Unconfirmed whether 1.0.53-2 fixed it. File
+  upstream issue ONLY if reproducible after settings.json refresh.
+- **`omcp doctor` stale-settings detection**: detect entries in
+  `~/.copilot/settings.json` that reference missing handler scripts;
+  emit a warning + suggest `omcp setup` to refresh. Would have caught
+  the stale-dispatch-script scenario before runtime.
+- **Replace `--allow-all-tools` with `--yolo` for looping modes**
+  (tidy-up): `mode.ts:239` unconditionally pushes `--allow-all-tools`;
+  `--yolo` added in v1.4 supersedes it for looping modes. Consolidating
+  saves one arg. Non-blocking — both forms are valid.
+- **Daemon mode** + **modifiedArgs surgeon** (user-demand gated).
+- **Marketplace publish** + user-facing docs + auto-update.
+
 ## [1.3.0] — 2026-05-24
 
 ### Notable — UX layer + protocol completion + first long-run smoke

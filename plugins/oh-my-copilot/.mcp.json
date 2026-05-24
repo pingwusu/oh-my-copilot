@@ -44,6 +44,11 @@
       "command": "node",
       "args": ["${PLUGIN_ROOT}/dist/mcp/python-repl-server.js"],
       "description": "Python REPL: python_repl({ code, timeout_ms? }) — spawns python3/python, returns { stdout, stderr, exitCode, timedOut }."
+    },
+    "omcp-shared-memory": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/dist/mcp/shared-memory-server.js"],
+      "description": "Cross-session shared key-value memory with optional TTL (shared_memory_write/read/list/delete/cleanup)."
     }
   }
 }
