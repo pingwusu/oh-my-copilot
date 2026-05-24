@@ -304,23 +304,23 @@ export function runMode(opts: ModeOptions): number {
         writeRalphState(preSpawnRalphSnapshot);
       }
     } else {
-      // Clean exit: re-read POST-spawn PRD status and ralph-state so we see
-      // any work Copilot completed during the run (Fix A — never use the
-      // pre-spawn prdStatusSnapshot for this decision).
+      // Clean exit: re-read POST-spawn PRD status so we see work Copilot
+      // completed during the run (Fix A, v1.4 RCA — never use the pre-spawn
+      // prdStatusSnapshot for this decision).
+      //
+      // Ralph-state itself was already wiped by clearModeState() above and
+      // is intentionally NOT re-read here: any mid-run state mutation by the
+      // Stop hook is owned by persistent-mode/index.ts (which fires inside
+      // the sync spawn and runs its own clearRalphState path). mode.ts only
+      // owns spawn-cycle housekeeping using the pre-spawn snapshot.
       const postRunPrd = getPrdCompletionStatus();
-      const postRunRalph = readRalphState();
       const shouldClear =
         postRunPrd.allComplete ||
-        (postRunRalph?.architectApproved === true) ||
-        (preSpawnRalphSnapshot?.architectApproved === true);
-      if (!shouldClear) {
+        preSpawnRalphSnapshot?.architectApproved === true;
+      if (!shouldClear && preSpawnRalphSnapshot) {
         // PRD not complete and no architect approval: preserve state for
-        // resume. If clearModeState deleted the file, restore post-run state
-        // (preferred) or fall back to pre-spawn snapshot.
-        const stateToRestore = postRunRalph ?? preSpawnRalphSnapshot;
-        if (stateToRestore) {
-          writeRalphState(stateToRestore);
-        }
+        // resume.
+        writeRalphState(preSpawnRalphSnapshot);
       }
       // else: clearModeState already removed the file — done.
     }
