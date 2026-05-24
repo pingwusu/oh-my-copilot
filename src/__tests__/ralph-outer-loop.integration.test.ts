@@ -302,6 +302,40 @@ describe("v1.6 ralph outer-loop — iteration advance without Stop hook", () => 
     expect(post!.active).toBe(true);
   });
 
+  it("test 8 (v1.7 M2): iteration 2+ spawn args include continuation context", () => {
+    writePrd(makePrd(3, false));
+    // Mock spawn: complete one story per call so loop iterates ≥ 2 times.
+    spawnMock.mockImplementation(() => {
+      const prd = readPrdFromDisk();
+      const next = prd.userStories.find((s) => !s.passes);
+      if (next) {
+        next.passes = true;
+        writePrd(prd);
+      }
+      return { status: 0, pid: 1 };
+    });
+
+    runMode({ mode: "ralph", task: "M2 continuation test" });
+
+    // First call's prompt is the raw task; subsequent calls must have
+    // the continuation wrapper.
+    expect(spawnMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+
+    const firstCallArgs = spawnMock.mock.calls[0][1] as string[];
+    const firstP = firstCallArgs.indexOf("-p");
+    const firstPrompt = firstCallArgs[firstP + 1] as string;
+    expect(firstPrompt).not.toContain("<ralph-continuation");
+
+    const secondCallArgs = spawnMock.mock.calls[1][1] as string[];
+    const secondP = secondCallArgs.indexOf("-p");
+    const secondPrompt = secondCallArgs[secondP + 1] as string;
+    expect(secondPrompt).toContain('<ralph-continuation iteration="2">');
+    expect(secondPrompt).toContain("</ralph-continuation>");
+    // The original task slash command should still be present after the
+    // continuation wrapper.
+    expect(secondPrompt).toContain("/oh-my-copilot:ralph");
+  });
+
   it("test 7 (v1.7 M1): stallBailAfter clamp — pass 0 falls back to 1", () => {
     writePrd(makePrd(3, false));
     let call = 0;

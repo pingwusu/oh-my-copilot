@@ -33,6 +33,7 @@ import {
   writeRalphState,
   clearRalphState,
   getPrdCompletionStatus,
+  getRalphContext,
   readRalphState,
 } from "../../lib/ralph-state.js";
 import { readBoulderState } from "../../lib/boulder-state.js";
@@ -343,7 +344,29 @@ export function runMode(opts: ModeOptions): number {
         outerLoopOwned: true,
       });
 
-      result = spawnSyncCrossPlatform("copilot", args, {
+      // v1.7 M2 continuation context: for iteration 2+, inject
+      // getRalphContext (progress notes + PRD status + next-story
+      // prompt) into the -p prompt so Copilot picks up where the prior
+      // spawn left off, instead of cold-starting on the same task.
+      //
+      // Iteration 1 keeps the original prompt — there's no prior
+      // context to carry forward yet.
+      //
+      // Build a fresh copy of `args` for each spawn so the mock
+      // observability (and any future child-process inspection) sees
+      // the actual args at call time, not the cumulative mutations.
+      const spawnArgs = [...args];
+      if (iteration > 1) {
+        const continuation = getRalphContext();
+        const augmented = `<ralph-continuation iteration="${iteration}">\n${continuation}\n</ralph-continuation>\n\n${prompt}`;
+        const pFlag = opts.interactive ? "-i" : "-p";
+        const pIdx = spawnArgs.indexOf(pFlag);
+        if (pIdx >= 0 && pIdx + 1 < spawnArgs.length) {
+          spawnArgs[pIdx + 1] = augmented;
+        }
+      }
+
+      result = spawnSyncCrossPlatform("copilot", spawnArgs, {
         stdio: "inherit",
         shell: false,
       });
