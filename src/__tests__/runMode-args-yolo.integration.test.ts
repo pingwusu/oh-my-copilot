@@ -92,6 +92,20 @@ describe("runMode args — looping modes must include --autopilot AND --yolo (ca
     expect(args).toContain("--yolo");
   });
 
+  it("v1.7 US-07: looping mode (ralph) does NOT also push redundant --allow-all-tools (--yolo covers it)", () => {
+    runMode({ mode: "ralph", task: "test" });
+    const args = getCapturedArgs(spawnMock);
+    expect(args).toContain("--yolo");
+    expect(args).not.toContain("--allow-all-tools");
+  });
+
+  it("v1.7 US-07: one-shot mode (ask) still pushes --allow-all-tools (no --yolo for one-shots)", () => {
+    runMode({ mode: "ask", task: "test" });
+    const args = getCapturedArgs(spawnMock);
+    expect(args).not.toContain("--yolo");
+    expect(args).toContain("--allow-all-tools");
+  });
+
   it("autopilot mode pushes both --autopilot and --yolo", () => {
     runMode({ mode: "autopilot", task: "test" });
     const args = getCapturedArgs(spawnMock);

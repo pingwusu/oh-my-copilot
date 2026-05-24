@@ -258,7 +258,14 @@ export function runMode(opts: ModeOptions): number {
   }
   if (model) args.push("--model", model);
   if (opts.agent) args.push("--agent", opts.agent);
-  if (opts.allowAllTools !== false) args.push("--allow-all-tools");
+  // v1.7 US-07 tidy-up: --yolo (added in v1.4 for LOOPING_MODES) already
+  // implies --allow-all-tools per Copilot docs. Pushing both for looping
+  // modes is redundant; gate --allow-all-tools to non-looping (one-shot)
+  // modes only. Preserves existing behavior for ask/ralplan/plan/etc.
+  // and shaves one arg off the canonical looping invocation.
+  if (opts.allowAllTools !== false && !LOOPING_MODES.has(opts.mode)) {
+    args.push("--allow-all-tools");
+  }
   if (opts.silent) args.push("-s");
   if (LOOPING_MODES.has(opts.mode)) {
     // Canonical Copilot non-interactive invocation per official docs:
