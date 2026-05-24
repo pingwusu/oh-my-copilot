@@ -2,7 +2,14 @@
 // Runs a sequence of probes and prints a single-line verdict per check.
 
 import { execSync } from "node:child_process";
-import { copyFileSync, existsSync, readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
+import { join } from "node:path";
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import {
   type CopilotConfig,
@@ -216,7 +223,98 @@ export function runDoctor(): CheckResult[] {
     });
   }
 
+  // 9. Hook delivery health — best-effort scan of the most recent Copilot
+  // log for the upstream Windows pwsh dispatch bug pattern. See
+  // docs/upstream-reports/copilot-pwsh-dispatch-v1.5-investigation.md.
+  // When this probe lights up, the user's hook handlers ARE failing silently
+  // upstream-side; the omcp install itself is correct.
+  try {
+    const logsDir = join(paths.copilotHome, "logs");
+    const probe = probeHookDeliveryHealth(logsDir);
+    checks.push({
+      name: "hook delivery health",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "hook delivery health",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
   return checks;
+}
+
+/**
+ * Scan the most recent Copilot log file for the upstream Windows pwsh
+ * dispatch bug signature (eval_stdin SyntaxError). Returns a doctor check
+ * result; never throws (best-effort).
+ */
+export function probeHookDeliveryHealth(
+  logsDir: string,
+): { level: CheckLevel; detail: string } {
+  if (!existsSync(logsDir)) {
+    return { level: "ok", detail: "no Copilot logs directory yet" };
+  }
+  const files = readdirSync(logsDir).filter(
+    (f) => f.startsWith("process-") && f.endsWith(".log"),
+  );
+  if (files.length === 0) {
+    return { level: "ok", detail: "no Copilot log files yet" };
+  }
+  const stats = files.map((f) => ({
+    f,
+    mtime: statSync(join(logsDir, f)).mtimeMs,
+  }));
+  stats.sort((a, b) => b.mtime - a.mtime);
+  const latest = stats[0].f;
+  const content = readFileSync(join(logsDir, latest), "utf8");
+  return analyzeHookDeliveryFromLog(content, latest);
+}
+
+/**
+ * Pure analyzer for a Copilot log file's content. Extracted for testing.
+ *
+ * Detects two failure patterns:
+ *   1. eval_stdin SyntaxError — the upstream Windows pwsh dispatch bug
+ *      documented in copilot-pwsh-dispatch-v1.5-investigation.md. Child
+ *      Node loses the script-path argument and treats stdin payload as
+ *      TypeScript source.
+ *   2. Bare HookExitCodeError with code 1 (no eval_stdin) — a handler ran
+ *      and exited 1 for a non-upstream reason (handler bug, stale
+ *      settings.json target, etc.).
+ */
+export function analyzeHookDeliveryFromLog(
+  content: string,
+  filename: string,
+): { level: CheckLevel; detail: string } {
+  const evalStdinMatches =
+    content.match(/node:internal\/main\/eval_stdin/g) ?? [];
+  const hookErrMatches =
+    content.match(/HookExitCodeError: Hook command failed with code 1/g) ?? [];
+
+  if (evalStdinMatches.length > 0) {
+    return {
+      level: "warn",
+      detail:
+        `${evalStdinMatches.length} eval_stdin failures in ${filename} — ` +
+        `upstream Copilot Windows pwsh dispatch bug (handlers correctly ` +
+        `registered but Node loses script-path). See ` +
+        `docs/upstream-reports/copilot-pwsh-dispatch-v1.5-investigation.md.`,
+    };
+  }
+  if (hookErrMatches.length > 0) {
+    return {
+      level: "warn",
+      detail:
+        `${hookErrMatches.length} HookExitCodeError(s) in ${filename} ` +
+        `(non-eval_stdin) — handler script likely exited non-zero; ` +
+        `inspect stderr context in the log for the proximate cause.`,
+    };
+  }
+  return { level: "ok", detail: `latest log clean (${filename})` };
 }
 
 export function formatChecks(checks: CheckResult[]): string {
