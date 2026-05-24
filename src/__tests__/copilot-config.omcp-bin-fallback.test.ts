@@ -5,17 +5,12 @@ import {
   mergeCopilotHooks,
   resolveDefaultOmcpBin,
   resolveHookCommandBin,
-  resolveHookDispatchCommand,
 } from "../runtime/copilot-config.js";
 
 // path.join uses the host platform's separator. Tests assert against the
 // host-resolved join so they pass on both Windows and POSIX runners.
 const expectedPath = (root: string) =>
   `node "${join(root, "dist", "cli", "omcp.js")}"`;
-
-// L1.2 dispatcher path helper.
-const expectedDispatcherPath = (root: string, event: string) =>
-  `node "${join(root, "scripts", "omcp-hook-dispatch.cjs")}" ${event}`;
 
 // Phase B (pre-mortem #1) — when `omcp` is not on PATH, the hook command
 // must still dispatch to a working CLI. The fallback emits
@@ -108,19 +103,16 @@ describe("mergeCopilotHooks — auto-detection of omcpBin", () => {
     expect(cmd).toBe('node "/opt/foo/dist/cli/omcp.js" hook fire SessionStart --json');
   });
 
-  it("auto-detect path (L1.2): mergeCopilotHooks emits dispatcher form, NEVER bare omcp or multi-arg node", () => {
-    // L1.2 changed the contract: when no explicit omcpBin override is given,
-    // hook commands use the single-arg wrapper form
-    //   node "<abs>/scripts/omcp-hook-dispatch.cjs" <event>
-    // instead of the multi-arg form from L1.1
-    //   node "<abs>/dist/cli/omcp.js" hook fire <event> --json
-    // This avoids pwsh -c argument-parser corruption on Windows.
+  it("auto-detect path (L1.1): mergeCopilotHooks always emits absolute-node form, NEVER bare omcp", () => {
+    // L1.1 changed the contract: hook commands ALWAYS use the absolute-node
+    // form to bypass the npm shim layer (which caused Copilot's pwsh hook
+    // executor to trigger Node's eval-stdin SyntaxError on Windows). Even
+    // when `omcp` is on PATH, the hook command must NOT use the bare form.
     const result = mergeCopilotHooks(undefined, { events: ["SessionStart"] });
     const cmd = result["SessionStart"]![0]!.hooks[0]!.command;
     expect(cmd).not.toBe("omcp hook fire SessionStart --json");
-    expect(cmd).not.toMatch(/dist[\\/]cli[\\/]omcp\.js.*hook fire/);
     expect(cmd).toMatch(
-      /^node ".*scripts[\\/]omcp-hook-dispatch\.cjs" SessionStart$/,
+      /^node ".*dist[\\/]cli[\\/]omcp\.js" hook fire SessionStart --json$/,
     );
   });
 });
@@ -159,9 +151,9 @@ describe("resolveHookCommandBin (L1.1) — unconditional absolute-node form for 
     expect(result).toContain("Program Files");
   });
 
-  it("integration: every hook event uses dispatcher form via mergeCopilotHooks (L1.2)", () => {
+  it("integration: every hook event uses absolute-node form via mergeCopilotHooks", () => {
     // Cover all 13 OMCP_HOOK_EVENTS to confirm none accidentally fall back
-    // to the bare form or the L1.1 multi-arg form. This pins L1.2.
+    // to the bare form. This is the regression test that pins L1.1.
     const result = mergeCopilotHooks(undefined);
     const eventNames = Object.keys(result);
     expect(eventNames.length).toBeGreaterThanOrEqual(13);
@@ -170,11 +162,10 @@ describe("resolveHookCommandBin (L1.1) — unconditional absolute-node form for 
       expect(entry, `event ${event} should have a hook entry`).toBeDefined();
       expect(entry!.command).toMatch(
         new RegExp(
-          `^node ".*scripts[\\\\/]omcp-hook-dispatch\\.cjs" ${event}$`,
+          `^node ".*dist[\\\\/]cli[\\\\/]omcp\\.js" hook fire ${event} --json$`,
         ),
       );
       expect(entry!.command).not.toMatch(/^omcp hook fire/);
-      expect(entry!.command).not.toMatch(/dist[\\/]cli[\\/]omcp\.js.*hook fire/);
     }
   });
 
@@ -185,42 +176,8 @@ describe("resolveHookCommandBin (L1.1) — unconditional absolute-node form for 
     const stopCmd = result["Stop"]![0]!.hooks[0]!.command;
     const postCmd = result["PostToolUse"]![0]!.hooks[0]!.command;
     const userCmd = result["UserPromptSubmit"]![0]!.hooks[0]!.command;
-    // In the L1.2 dispatcher form the event name is the trailing token:
-    //   node "<abs>/scripts/omcp-hook-dispatch.cjs" <event>
-    // Replace only the trailing event-name token; the rest must match.
-    expect(stopCmd.replace(/ Stop$/, " X")).toBe(postCmd.replace(/ PostToolUse$/, " X"));
-    expect(stopCmd.replace(/ Stop$/, " X")).toBe(userCmd.replace(/ UserPromptSubmit$/, " X"));
-  });
-});
-
-describe("resolveHookDispatchCommand (L1.2) — single-arg dispatcher form", () => {
-  it("returns dispatcher command with event as trailing token", () => {
-    const root = "/opt/oh-my-copilot";
-    const result = resolveHookDispatchCommand("PostToolUse", { packageRoot: root });
-    expect(result).toBe(expectedDispatcherPath(root, "PostToolUse"));
-  });
-
-  it("handles Windows-style packageRoot with spaces", () => {
-    const root = "C:\\Program Files\\oh-my-copilot";
-    const result = resolveHookDispatchCommand("Stop", { packageRoot: root });
-    expect(result).toBe(expectedDispatcherPath(root, "Stop"));
-    expect(result).toContain('"');
-    expect(result).toContain("Program Files");
-  });
-
-  it("does NOT include 'hook fire' or '--json' in the command (wrapper handles those)", () => {
-    const root = "/x";
-    const result = resolveHookDispatchCommand("SessionStart", { packageRoot: root });
-    expect(result).not.toContain("hook fire");
-    expect(result).not.toContain("--json");
-    expect(result).toContain("omcp-hook-dispatch.cjs");
-    expect(result).toMatch(/ SessionStart$/);
-  });
-
-  it("points to scripts/omcp-hook-dispatch.cjs (not dist/)", () => {
-    const root = "/pkg";
-    const result = resolveHookDispatchCommand("PreToolUse", { packageRoot: root });
-    expect(result).toContain("scripts");
-    expect(result).not.toMatch(/dist[\\/]cli[\\/]omcp\.js/);
+    // Replace only the event-name segment; the rest must match.
+    expect(stopCmd.replace(/Stop/, "X")).toBe(postCmd.replace(/PostToolUse/, "X"));
+    expect(stopCmd.replace(/Stop/, "X")).toBe(userCmd.replace(/UserPromptSubmit/, "X"));
   });
 });
