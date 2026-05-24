@@ -365,6 +365,11 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       "v1.6: max OUTER-LOOP spawn count for ralph (each iteration = one copilot --autopilot spawn). Default 20. Outer loop tracks iteration counter in ralph-state independently of Copilot's intra-spawn turns. See docs/architecture/v1.6-outer-loop-redesign.md.",
       (v) => Number(v),
     )
+    .option(
+      "--stall-bail-after <n>",
+      "v1.7 M1: bail out of the outer loop when PRD `completed` count is unchanged for N consecutive iterations. Default 2. Prevents wasting --max-iterations spawns when Copilot is stuck (rate-limited, auth-failed, or producing garbage).",
+      (v) => Number(v),
+    )
     .action(
       (
         taskParts: string[],
@@ -376,6 +381,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           prd?: string;
           resume?: boolean;
           maxIterations?: number;
+          stallBailAfter?: number;
         },
       ) => {
         const code = runMode({
@@ -389,6 +395,7 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           prdPath: opts.prd,
           resume: opts.resume,
           maxOuterIterations: opts.maxIterations,
+          stallBailAfter: opts.stallBailAfter,
         });
         process.exitCode = code;
       },

@@ -257,4 +257,76 @@ describe("v1.6 ralph outer-loop — iteration advance without Stop hook", () => 
     // Clamp to 1: should still spawn once, complete first story.
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
+
+  it("test 6 (v1.7 M1): stall detection — bail after N consecutive zero-progress iterations", () => {
+    writePrd(makePrd(5, false));
+    // Mock spawn: complete first story on call 1, then never progress.
+    // Outer loop should observe stall and bail at iteration 3 (1 productive + 2 stalled).
+    let call = 0;
+    spawnMock.mockImplementation(() => {
+      call++;
+      if (call === 1) {
+        const prd = readPrdFromDisk();
+        const next = prd.userStories.find((s) => !s.passes);
+        if (next) {
+          next.passes = true;
+          writePrd(prd);
+        }
+      }
+      // call >= 2: no PRD mutation → stall
+      return { status: 0, pid: 1 };
+    });
+
+    runMode({
+      mode: "ralph",
+      task: "stall test",
+      maxOuterIterations: 20, // Loose cap so stall bails us before max
+      stallBailAfter: 2,
+    });
+
+    // Iteration 1: progress (completed: 0 → 1; prevCompleted was -1, no stall)
+    // Iteration 2: no progress (completed stays 1; stallCount: 0 → 1, prevCompleted=1)
+    // Iteration 3: no progress (stallCount: 1 → 2 == bailAfter, bail)
+    expect(spawnMock).toHaveBeenCalledTimes(3);
+
+    // PRD has 1/5 done.
+    const finalPrd = readPrdFromDisk();
+    const completed = finalPrd.userStories.filter((s) => s.passes).length;
+    expect(completed).toBe(1);
+
+    // State preserved at iteration 3, outerLoopOwned cleared.
+    const post = readRalphState();
+    expect(post).not.toBeNull();
+    expect(post!.iteration).toBe(3);
+    expect(post!.outerLoopOwned).toBe(false);
+    expect(post!.active).toBe(true);
+  });
+
+  it("test 7 (v1.7 M1): stallBailAfter clamp — pass 0 falls back to 1", () => {
+    writePrd(makePrd(3, false));
+    let call = 0;
+    spawnMock.mockImplementation(() => {
+      call++;
+      if (call === 1) {
+        const prd = readPrdFromDisk();
+        const next = prd.userStories.find((s) => !s.passes);
+        if (next) {
+          next.passes = true;
+          writePrd(prd);
+        }
+      }
+      return { status: 0, pid: 1 };
+    });
+
+    runMode({
+      mode: "ralph",
+      task: "stall clamp",
+      maxOuterIterations: 10,
+      stallBailAfter: 0, // Should clamp to 1
+    });
+
+    // Iter 1: progress (no stall). Iter 2: no progress (stallCount=1, bail
+    // since stallBailAfter clamped to 1). So 2 spawns total.
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
 });

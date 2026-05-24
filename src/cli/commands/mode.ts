@@ -73,6 +73,17 @@ export interface ModeOptions {
    * Only applies when opts.mode === "ralph".
    */
   maxOuterIterations?: number;
+  /**
+   * v1.7: stall detection in ralph outer-loop. If `(postRunPrd.status?.completed ?? 0)`
+   * count is unchanged for N consecutive iterations, bail out early
+   * (preserving state for resume). Prevents wasting `maxOuterIterations`
+   * spawns when Copilot is stuck (rate-limited, auth-failed, hallucinating).
+   *
+   * Default: 2 (bail after 2 consecutive zero-progress iterations).
+   * Clamped to >= 1 to keep loop progressing.
+   * Only applies when opts.mode === "ralph".
+   */
+  stallBailAfter?: number;
 }
 
 // Modes that should run as a continuous loop (Copilot --autopilot keeps going
@@ -298,6 +309,12 @@ export function runMode(opts: ModeOptions): number {
     // even if they pass --max-iterations 0 by mistake.
     const rawMaxOuter = opts.maxOuterIterations ?? 20;
     const maxOuter = Math.max(1, rawMaxOuter);
+    // v1.7 M1 stall detection: bail when PRD completed-count is
+    // unchanged for N consecutive iterations.
+    const rawStallBail = opts.stallBailAfter ?? 2;
+    const stallBailAfter = Math.max(1, rawStallBail);
+    let prevCompleted = -1; // sentinel: no prior iteration yet
+    let stallCount = 0;
     let iteration = 1;
     // Initialize result with a placeholder; the loop must always run at
     // least once and assign it. TypeScript can't see through the loop
@@ -366,15 +383,43 @@ export function runMode(opts: ModeOptions): number {
         break;
       }
 
-      // PRD not complete + no architect approval: advance iteration and
-      // re-spawn. The next iteration's writeRalphState above stamps the
-      // new iteration value, and Copilot picks up the same task.
+      // v1.7 M1 stall detection: if PRD `completed` count did NOT advance
+      // since the previous iteration, increment stallCount. After
+      // `stallBailAfter` consecutive stalls, bail out (preserving state
+      // for resume). Prevents burning all `maxOuter` spawns when Copilot
+      // is stuck.
+      if (prevCompleted !== -1 && (postRunPrd.status?.completed ?? 0) === prevCompleted) {
+        stallCount++;
+        if (stallCount >= stallBailAfter) {
+          if (isTrackedMode) {
+            clearModeState(opts.mode as ModeName);
+          }
+          // Preserve state for resume — same shape as max-exhaustion path.
+          writeRalphState({
+            active: true,
+            iteration,
+            lastFiredAt: new Date().toISOString(),
+            prompt: opts.task,
+            prdPath: opts.prdPath,
+            architectApproved: preSpawnRalphSnapshot?.architectApproved,
+            outerLoopOwned: false,
+          });
+          break;
+        }
+      } else {
+        stallCount = 0;
+      }
+      prevCompleted = (postRunPrd.status?.completed ?? 0);
+
+      // PRD not complete + no architect approval + not stalled: advance
+      // iteration and re-spawn. The next iteration's writeRalphState above
+      // stamps the new iteration value, and Copilot picks up the same task.
       //
       // v1.6 architect finding M3: clearModeState was moved OUT of the
       // per-iteration body — running it each iteration deleted the mutual-
       // exclusion lock file between spawns, allowing concurrent modes to
       // start during the gap. Now clearModeState runs ONLY on termination
-      // (allComplete / approved / non-zero exit / max-exhaustion below),
+      // (allComplete / approved / non-zero exit / stall / max-exhaustion),
       // not between iterations.
       iteration++;
     }
