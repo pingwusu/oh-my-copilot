@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-05-24
+
+### Notable — UX layer + protocol completion + first long-run smoke
+
+Tier 1 (user-facing) and Tier 2 (protocol completion) follow-ups from
+v1.2.0's HANDOFF. 4 commits + 1 inline fix + 1 release commit.
+
+Tests: 1082 → 1098 passing (+16), 2 skipped, 0 failed (1 pre-existing
+worker-fork EPERM baseline unchanged since v0.4.0). Build: tsc clean.
+
+### Tier 1 — UX
+
+- `2f6eff6` **HUD data wiring**: omcp hud now fills columns 3-5 (modes /
+  ralph iter/max / team done/spawned). Was showing all 4 dashes;
+  `state.ts` added 7 missing mode candidates (plan, ccg, learner,
+  deep-interview, deep-dive, external-context, ai-slop-cleaner) and
+  `render.ts` now gates ralph-iter on the active flag. 8 new tests.
+
+### Tier 2 — Protocol completion
+
+- `8aef816` **Worker-side shutdown ack**: new `skills/team-worker/SKILL.md`
+  + OMCP_TEAM_SESSION_ID / OMCP_TEAM_WORKER_INDEX env-var propagation
+  through both tmux and detached spawn modes. Workers can now actually
+  call the `omcp team-ack` CLI verb (shipped in v1.2.0) instead of the
+  protocol being a paper trail. 3 tests cover env-var propagation.
+
+- `dc0486e` + `a028753` **L2.5b fixing-phase incoming edge**:
+  `runTeamCollect` now calls `mergeShards()` when a `teamName` is
+  provided; if `MergeReport.conflicts.length > 0`, transitions
+  `executing → fixing` and writes `conflicts.json` for manual / future
+  automated resolution. `executing → fixing` added to
+  `VALID_TEAM_TRANSITIONS`. The `omcp team-collect` CLI verb now exposes
+  `--team-name <name>` and maps exit code 2 to the fixing phase.
+  Defense-in-depth in `a028753`: `mergeShards` exceptions caught with
+  warning log + empty-report fallback so the controller never throws
+  uncaught. 5 new tests cover conflict detection + idempotency.
+
+### Tier 3 — Smoke verification
+
+- `docs/smoke/L3.6-long-run-ralph-smoke.md` (this release): 10-story
+  long-run smoke against real Copilot. Result: **orchestration PASS,
+  housekeeping PARTIAL**. All 10 stories complete + 10 files created +
+  ralph exit 0 in 2m25s. The housekeeping gap (iteration counter not
+  advancing under `--autopilot`; clearRalphState not firing on
+  allComplete) is documented as v1.4 RCA. Core orchestration is
+  validated end-to-end; the housekeeping layer needs a deeper smoke
+  with multi-turn Copilot continuations to surface its real behavior.
+
+### What's still pending (carry forward to v1.4.0)
+
+- **L3.6 housekeeping RCA**: investigate why ralph-state iteration
+  doesn't advance + clearRalphState doesn't fire under `--autopilot`
+  single-turn completion. Likely interaction between
+  `incrementRalphIteration` timing and Stop-event dispatch.
+- **High-load compaction smoke**: re-run L3.6 with a 30+ story PRD
+  requiring real edits (not trivial writes) to push context above 50%
+  and verify L1.3 Stop-side advise actually delivers.
+- **L2.4 verify-phase live smoke** (still deferred).
+- **L2.9 team multi-agent live smoke** (still deferred).
+- **Upstream Copilot CLI bug fix** (file issue, monitor).
+- **Daemon mode + modifiedArgs surgeon** (user-demand gated).
+- **Marketplace publish** + user-facing docs + auto-update.
+
 ## [1.2.0] — 2026-05-24
 
 ### Notable — orchestrator hardening: L1 upstream workaround + L2.5b phase controller + L2.7 ack completion

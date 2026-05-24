@@ -1,11 +1,76 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-24 evening (v1.2.0 cut — Tier 1+2 follow-ups landed: L1.3 upstream-bug workaround + L2.7 worker ack + L2.5b phase controller)
+**Updated**: 2026-05-24 late-evening (v1.3.0 cut — UX layer (HUD) + protocol completion (worker-side ack) + L2.5b fixing-phase + first long-run smoke)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z v1.2.0 release commit
-**Version**: **v1.2.0** (orchestrate hardening; cut this session as the post-v1.1.0 Tier 1+2 deliverable)
-**Tests**: 1082 passing, 0 failed, 2 skipped (+38 from v1.1.0 baseline 1044, +103 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
+**Latest commit**: see `git log -1` — Phase Z v1.3.0 release commit
+**Version**: **v1.3.0** (UX + protocol completion; cut this session atop v1.2.0)
+**Tests**: 1098 passing, 0 failed, 2 skipped (+16 from v1.2.0 baseline 1082, +119 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
+
+---
+
+## v1.3.0 deliverables (this session)
+
+5 commits + 1 inline Critic-fix + 1 release commit + 1 smoke doc atop v1.2.0:
+
+| Commit | Phase | Title |
+|---|---|---|
+| `2f6eff6` | HUD | feat(hud): wire columns 3-5 from ralph/mode/team state files |
+| `8aef816` | L2.7-ack-skill | feat(team): propagate OMCP_TEAM_* env to workers + skill-side ack protocol |
+| `dc0486e` | L2.5b-ext | feat(team): fixing-phase incoming edge via shard-merge conflict detection |
+| `a028753` | hygiene | fix(team-collect): catch mergeShards errors + wire --team-name CLI option |
+| `docs/smoke/L3.6-long-run-ralph-smoke.md` | L3.6 | smoke artifact (orchestration PASS / housekeeping PARTIAL) |
+| (this) | Z | chore(release): v1.3.0 |
+
+team+critic verification applied per phase (same standard as v1.1, v1.2):
+- Architect APPROVE all 3 Wave A commits (2f6eff6, 8aef816, dc0486e)
+- Critic APPROVE all 3 with 1 MINOR + 1 architectural concern (mergeShards exception
+  + CLI verb missing `--team-name`) — addressed inline in `a028753`.
+- No Architect-Critic disagreement → no tie-breaker needed.
+- L3.6 smoke conducted post-Wave-A as release-verify.
+
+## v1.4.0 follow-ups (carry forward, prioritized)
+
+### Tier 1 — housekeeping RCA (uncovered by L3.6 smoke)
+
+1. **ralph-state iteration counter under --autopilot**: L3.6 smoke showed
+   the counter doesn't advance when Copilot completes all stories in a single
+   `--autopilot` turn. Likely interaction between `incrementRalphIteration`
+   (Stop hook) and how `--autopilot` dispatches Stop events. RCA + fix.
+2. **clearRalphState conditional path**: same smoke — state should have
+   cleared on `allComplete:true + exit 0` per L3.3 design, but didn't. Either
+   the Stop hook isn't reaching the clear branch OR the PRD allComplete state
+   isn't visible at Stop-time. RCA + test.
+3. **High-load compaction smoke**: re-run L3.6 with 30+ stories requiring
+   real edits (not trivial writes) to push context above 50% utilization +
+   verify L1.3 Stop-side advise actually delivers. Currently L3.6's 14.4%
+   utilization is below the 80% threshold so advise never fired.
+
+### Tier 2 — remaining v1.3 deferrals
+
+4. **L2.4 verify-phase live smoke** (still deferred from v1.2.0).
+5. **L2.9 team multi-agent live smoke** (still deferred from v1.2.0).
+6. **Upstream Copilot CLI hook-dispatch bug** — file the issue at github.com/
+   github/copilot-cli using the draft at
+   `docs/upstream-reports/copilot-cli-hook-eval-stdin.md`; monitor for fix.
+
+### Tier 3 — feature deepening
+
+7. **`fixing` phase auto-resolution** — v1.3.0 detects + writes
+   `conflicts.json`, but resolution is manual. Add a `omcp team-resolve` verb
+   that reads conflicts.json + offers strategies (winner-takes-all, retry
+   losing worker, etc.).
+8. **HUD column 6 (note)** — surface stale-state warnings, recent error,
+   `omcp doctor` status, etc.
+9. **HUD cost/tokens columns** — gated on cost-governor hook actually
+   delivering through the upstream-bug-affected PostToolUse path; v1.4 should
+   move cost-governor to Stop-side delivery same as L1.3 did for compaction.
+
+### Tier 4 — infrastructure / product
+
+10. **Marketplace publish** + auto-update flow + user-facing docs.
+11. **`npm pack && npm install -g <.tgz>` CI gate**.
+12. **Daemon mode (Option O-B)** + **modifiedArgs surgeon (Phase 7)** — user-demand gated.
 
 ---
 
