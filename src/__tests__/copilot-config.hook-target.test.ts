@@ -44,10 +44,10 @@ describe("Phase 1 hook-target fix", () => {
     // Spot-check one well-known event
     expect(settings.hooks.PreToolUse).toBeDefined();
     const omcpEntry = settings.hooks.PreToolUse[0];
-    // L1.1: default command is now `node "<abs>" hook fire ...` form; match
-    // the stable suffix that is present in both the new absolute-node form and
-    // any explicit omcpBin override.
-    expect(omcpEntry.hooks[0].command).toContain("hook fire PreToolUse --json");
+    // L1.2: default command is now the dispatcher form
+    //   node "<abs>/scripts/omcp-hook-dispatch.cjs" PreToolUse
+    // Match the stable dispatcher suffix present in the auto-detected form.
+    expect(omcpEntry.hooks[0].command).toContain("omcp-hook-dispatch.cjs\" PreToolUse");
     expect(omcpEntry.hooks[0].__omcp).toBe(true);
   });
 

@@ -319,10 +319,44 @@ export function resolveDefaultOmcpBin(opts: ResolveOmcpBinOptions = {}): string 
  * The optional `omcpBin` argument on `MergeHookOptions` continues to take
  * precedence — tests pass an explicit override to avoid hitting filesystem
  * resolution entirely.
+ *
+ * @deprecated For Copilot hook commands prefer `resolveHookDispatchCommand()`
+ * which emits the single-arg wrapper form that avoids pwsh multi-arg
+ * parser corruption on Windows (L1.2 fix).
  */
 export function resolveHookCommandBin(opts: ResolveOmcpBinOptions = {}): string {
   const root = opts.packageRoot ?? defaultPackageRoot();
   return `node "${join(root, "dist", "cli", "omcp.js")}"`;
+}
+
+/**
+ * Resolve the full hook command string for a single Copilot hook event,
+ * using the `omcp-hook-dispatch.cjs` wrapper script (L1.2 fix).
+ *
+ * **Why a wrapper**: L1.1 switched from the bare npm-shim form to the
+ * absolute-node multi-arg form (`node "<abs>" hook fire <event> --json`),
+ * reducing PostToolUse failures from 42 → 27. The remaining 27 failures
+ * are caused by pwsh's `-c` argument parser corrupting the multi-arg
+ * string on pathological inputs (large JSON payloads, embedded quotes).
+ *
+ * By dispatching to a single-arg wrapper:
+ *   `node "<abs>/scripts/omcp-hook-dispatch.cjs" <event>`
+ * Copilot only needs to pass two tokens after `pwsh -c`. The wrapper
+ * receives `event` as `process.argv[2]` and re-spawns omcp.js via
+ * Node's native `child_process.spawnSync` — which handles argument
+ * quoting natively without any shell in the middle. stdin/stdout/stderr
+ * are inherited so Copilot's JSON pipe flows through unchanged.
+ *
+ * Returns a full command string, e.g.:
+ *   `node "C:\...\scripts\omcp-hook-dispatch.cjs" PostToolUse`
+ */
+export function resolveHookDispatchCommand(
+  event: string,
+  opts: ResolveOmcpBinOptions = {},
+): string {
+  const root = opts.packageRoot ?? defaultPackageRoot();
+  const dispatcherPath = join(root, "scripts", "omcp-hook-dispatch.cjs");
+  return `node "${dispatcherPath}" ${event}`;
 }
 
 /**
@@ -334,13 +368,17 @@ export function mergeCopilotHooks(
   existing: CopilotHooksMap | undefined,
   opts: MergeHookOptions = {},
 ): CopilotHooksMap {
-  // `opts.omcpBin` (explicit override) wins. Otherwise use
-  // `resolveHookCommandBin()` which ALWAYS returns the absolute-node form
-  // (`node "<abs>" ...`) — bypassing the npm shim layer that causes
-  // Copilot's pwsh hook executor to trigger Node's eval-stdin SyntaxError
-  // on Windows. See `docs/probes/L1-hook-dispatch-format.md` for the
-  // root-cause investigation; mirrors omc's `src/hooks/setup/index.ts:166`.
-  const omcpBin = opts.omcpBin ?? resolveHookCommandBin();
+  // When `opts.omcpBin` is explicitly set (e.g. in tests), fall back to the
+  // legacy `omcpHookCommand(event, omcpBin)` form so existing callers that
+  // pass an explicit bin override continue to work unchanged.
+  //
+  // When no explicit override is given, use `resolveHookDispatchCommand(event)`
+  // (L1.2 fix) which emits:
+  //   node "<abs>/scripts/omcp-hook-dispatch.cjs" <event>
+  // This single-arg wrapper bypasses pwsh's multi-arg parser — the root cause
+  // of the remaining 27 PostToolUse failures after L1.1. The wrapper re-spawns
+  // omcp.js via Node's native child_process.spawnSync with stdin inherited.
+  const explicitBin = opts.omcpBin;
   const globalTimeout = opts.timeoutSec;
   const timeoutsByEvent = opts.timeoutsByEvent ?? {};
   const events = opts.events ?? OMCP_HOOK_EVENTS;
@@ -367,12 +405,16 @@ export function mergeCopilotHooks(
       globalTimeout ??
       EVENT_DEFAULT_TIMEOUTS[event] ??
       5;
+    // L1.2: use dispatcher form unless an explicit bin override was given.
+    const command = explicitBin
+      ? omcpHookCommand(event, explicitBin)
+      : resolveHookDispatchCommand(event);
     const omcpMatcher: CopilotHookMatcher = {
       matcher: "*",
       hooks: [
         {
           type: "command",
-          command: omcpHookCommand(event, omcpBin),
+          command,
           timeout,
           __omcp: true,
         },
