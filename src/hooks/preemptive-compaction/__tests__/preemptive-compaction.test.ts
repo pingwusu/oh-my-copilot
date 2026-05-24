@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -490,5 +490,246 @@ describe("createPreemptiveCompactionHook", () => {
       }),
     );
     expect(result).toEqual({ kind: "noop" });
+  });
+});
+
+// ─── Stop event (Phase L1.3 upstream-bug workaround) ──────────────────────────
+
+describe("createPreemptiveCompactionHook — Stop event", () => {
+  const CWD = process.cwd();
+
+  const WARN_RATIO = 0.001; // triggers at ~200 tokens in default 200k context
+  const baseConfig = {
+    warningThreshold: WARN_RATIO,
+    criticalThreshold: 0.999,
+    cooldownMs: 100,
+    maxWarnings: MAX_WARNINGS,
+  };
+
+  function clearRalphStateInCwd() {
+    for (const rel of [
+      ".omcp/state/ralph-state.json",
+      ".omcp/progress.txt",
+    ]) {
+      const p = join(CWD, rel);
+      if (existsSync(p)) {
+        try {
+          unlinkSync(p);
+        } catch {
+          // Best-effort; tolerate races.
+        }
+      }
+    }
+  }
+
+  // Each test uses a unique session ID so the in-process Map never bleeds
+  // between tests.
+  let SESSION: string;
+
+  beforeEach(() => {
+    SESSION = uniqueSession("stop");
+    clearRalphStateInCwd();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    resetSessionTokenEstimate(SESSION);
+    clearRapidFireDebounce(SESSION);
+    clearRalphStateInCwd();
+    vi.useRealTimers();
+  });
+
+  // ── 1. Stop is in the events list ─────────────────────────────────────────
+
+  it("Stop event is subscribed", () => {
+    const hook = createPreemptiveCompactionHook();
+    expect(hook.events).toContain("Stop");
+  });
+
+  // ── 2. Stop below threshold → noop ────────────────────────────────────────
+
+  it("Stop with tokens BELOW threshold returns noop", async () => {
+    const hook = createPreemptiveCompactionHook({
+      warningThreshold: 0.99, // nearly impossible to hit with zero tokens
+    });
+    const result = await hook.run(
+      makeCtx({ event: "Stop", sessionId: SESSION, cwd: CWD }),
+    );
+    expect(result).toEqual({ kind: "noop" });
+  });
+
+  // ── 3. Stop above threshold + cooldown elapsed → advise ──────────────────
+
+  it("Stop with accumulated tokens ABOVE threshold returns advise with warning message", async () => {
+    const hook = createPreemptiveCompactionHook(baseConfig);
+
+    // Seed accumulated tokens via PostToolUse (debounce bypass not needed —
+    // we're using a fresh session, so no prior analysis time recorded).
+    const bigPayload = contentAtRatio(WARN_RATIO + 0.1);
+    // PostToolUse fires warning #1 and records lastWarningTime.
+    await hook.run(
+      makeCtx({
+        event: "PostToolUse",
+        sessionId: SESSION,
+        cwd: CWD,
+        toolName: "bash",
+        toolResult: bigPayload,
+      }),
+    );
+
+    // Advance past cooldown so Stop can fire warning #2.
+    vi.advanceTimersByTime(baseConfig.cooldownMs + 50);
+
+    const result = await hook.run(
+      makeCtx({ event: "Stop", sessionId: SESSION, cwd: CWD }),
+    );
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toBe(CONTEXT_WARNING_MESSAGE);
+    }
+  });
+
+  // ── 4. Stop respects MAX_WARNINGS cap ────────────────────────────────────
+
+  it("Stop is silent after MAX_WARNINGS warnings have been emitted", async () => {
+    const hook = createPreemptiveCompactionHook({
+      ...baseConfig,
+      cooldownMs: 1,
+      maxWarnings: 2,
+    });
+    const bigPayload = contentAtRatio(WARN_RATIO + 0.1);
+
+    // Fire PostToolUse twice to consume all warnings.
+    for (let i = 0; i < 2; i++) {
+      vi.advanceTimersByTime(RAPID_FIRE_DEBOUNCE_MS + 10);
+      clearRapidFireDebounce(SESSION);
+      await hook.run(
+        makeCtx({
+          event: "PostToolUse",
+          sessionId: SESSION,
+          cwd: CWD,
+          toolName: "bash",
+          toolResult: bigPayload,
+        }),
+      );
+    }
+
+    // Advance past cooldown so the cooldown guard doesn't interfere.
+    vi.advanceTimersByTime(RAPID_FIRE_DEBOUNCE_MS + 100);
+
+    // Stop after max warnings reached — must be noop.
+    const result = await hook.run(
+      makeCtx({ event: "Stop", sessionId: SESSION, cwd: CWD }),
+    );
+    expect(result).toEqual({ kind: "noop" });
+  });
+
+  // ── 5. Stop re-arms after COMPACTION_REARM_EVERY iterations ──────────────
+
+  it("Stop re-arms warning counter at COMPACTION_REARM_EVERY ralph iterations", async () => {
+    // Import the constant at call site to avoid circular dependency issues
+    const { COMPACTION_REARM_EVERY } = await import("../constants.js");
+
+    const hook = createPreemptiveCompactionHook({
+      ...baseConfig,
+      cooldownMs: 1,
+      maxWarnings: 1, // exhausted after a single warning
+    });
+    const bigPayload = contentAtRatio(WARN_RATIO + 0.1);
+
+    // Fire PostToolUse to consume the single allowed warning.
+    const first = await hook.run(
+      makeCtx({
+        event: "PostToolUse",
+        sessionId: SESSION,
+        cwd: CWD,
+        toolName: "bash",
+        toolResult: bigPayload,
+      }),
+    );
+    expect(first.kind).toBe("advise");
+
+    // Advance past cooldown.
+    vi.advanceTimersByTime(RAPID_FIRE_DEBOUNCE_MS + 100);
+
+    // Confirm max reached: Stop is noop.
+    const beforeRearm = await hook.run(
+      makeCtx({ event: "Stop", sessionId: SESSION, cwd: CWD }),
+    );
+    expect(beforeRearm).toEqual({ kind: "noop" });
+
+    // Write ralph-state.json at the re-arm boundary iteration.
+    const stateDir = join(CWD, ".omcp", "state");
+    if (!existsSync(stateDir)) {
+      mkdirSync(stateDir, { recursive: true });
+    }
+    writeFileSync(
+      join(stateDir, "ralph-state.json"),
+      JSON.stringify({ iteration: COMPACTION_REARM_EVERY, active: true }),
+    );
+
+    // Advance time again so cooldown is elapsed.
+    vi.advanceTimersByTime(RAPID_FIRE_DEBOUNCE_MS + 100);
+
+    // Stop after re-arm: warning counter reset → should advise again.
+    const afterRearm = await hook.run(
+      makeCtx({ event: "Stop", sessionId: SESSION, cwd: CWD }),
+    );
+    expect(afterRearm.kind).toBe("advise");
+  });
+
+  // ── 6. Stop reads estimatePromptHistoryTokens from ralph state files ──────
+
+  it("Stop detects threshold breach via estimatePromptHistoryTokens alone (PostToolUse path absent)", async () => {
+    // No PostToolUse fired: accumulated session tokens = 0.
+    // Create an active ralph-state.json + progress.txt large enough to cross
+    // the warning threshold independently.
+    const stateDir = join(CWD, ".omcp", "state");
+    if (!existsSync(stateDir)) {
+      mkdirSync(stateDir, { recursive: true });
+    }
+    writeFileSync(
+      join(stateDir, "ralph-state.json"),
+      JSON.stringify({ iteration: 1, active: true }),
+    );
+
+    // Write a progress.txt large enough to exceed warning threshold.
+    // targetTokens = warningThreshold * CLAUDE_DEFAULT_CONTEXT_LIMIT
+    // bytes needed = targetTokens * CHARS_PER_TOKEN (each token ≈ 4 chars)
+    const targetTokens = Math.ceil(
+      (WARN_RATIO + 0.01) * CLAUDE_DEFAULT_CONTEXT_LIMIT,
+    );
+    const bigContent = "x".repeat(targetTokens * CHARS_PER_TOKEN);
+    const omcpDir = join(CWD, ".omcp");
+    if (!existsSync(omcpDir)) {
+      mkdirSync(omcpDir, { recursive: true });
+    }
+    writeFileSync(join(CWD, ".omcp", "progress.txt"), bigContent);
+
+    const hook = createPreemptiveCompactionHook(baseConfig);
+    const result = await hook.run(
+      makeCtx({ event: "Stop", sessionId: SESSION, cwd: CWD }),
+    );
+    expect(result.kind).toBe("advise");
+  });
+
+  // ── 7. PostToolUse path still works (regression guard) ───────────────────
+
+  it("PostToolUse path still returns advise when threshold is exceeded", async () => {
+    const hook = createPreemptiveCompactionHook(baseConfig);
+    const bigPayload = contentAtRatio(WARN_RATIO + 0.1);
+    const result = await hook.run(
+      makeCtx({
+        event: "PostToolUse",
+        sessionId: SESSION,
+        cwd: CWD,
+        toolName: "bash",
+        toolResult: bigPayload,
+      }),
+    );
+    expect(result.kind).toBe("advise");
+    if (result.kind === "advise") {
+      expect(result.text).toBe(CONTEXT_WARNING_MESSAGE);
+    }
   });
 });

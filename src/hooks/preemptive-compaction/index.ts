@@ -391,7 +391,12 @@ const LARGE_OUTPUT_TOOLS = new Set([
 /**
  * Create the preemptive-compaction Hook object.
  *
- * Subscribes to PostToolUse + PreCompact.
+ * Subscribes to PostToolUse + PreCompact + Stop.
+ * Stop is a workaround for the upstream Copilot CLI bug that causes PostToolUse
+ * hooks to fail sporadically (Phase L1.3). Even when all PostToolUse deliveries
+ * are dropped, Stop fires reliably at the end of every Copilot turn and delivers
+ * the compaction advise. PostToolUse is kept so both paths work once upstream fixes
+ * the bug.
  * Returns `{ kind: "noop" }` when not triggered; `{ kind: "advise", text }` otherwise.
  */
 export function createPreemptiveCompactionHook(
@@ -401,7 +406,7 @@ export function createPreemptiveCompactionHook(
 
   return {
     name: "preemptive-compaction",
-    events: ["PostToolUse", "PreCompact"],
+    events: ["PostToolUse", "PreCompact", "Stop"],
 
     async run(ctx: HookContext): Promise<HookResult> {
       if (config?.enabled === false) {
@@ -458,6 +463,20 @@ export function createPreemptiveCompactionHook(
       if (event === "PreCompact") {
         // On PreCompact we check current cumulative estimate with no new tokens.
         // If already over threshold, warn; otherwise noop.
+        return runContextCheck(sessionId, cwd, 0, config);
+      }
+
+      // -- Stop ----------------------------------------------------------------
+      // Upstream Copilot CLI bug causes PostToolUse hooks to fail sporadically
+      // (27 failures observed; RCA in docs/probes/L1-hook-dispatch-format.md).
+      // Stop fires reliably at end of every turn and serves as a fallback
+      // delivery path for preemptive-compaction advise (Phase L1.3 workaround).
+      //
+      // Session token accumulation may be 0 if upstream ate all PostToolUse
+      // calls; `estimatePromptHistoryTokens` (inside runContextCheck) provides
+      // an independent estimate from ralph-state.json + progress.txt and is
+      // the primary signal when PostToolUse delivery is broken.
+      if (event === "Stop") {
         return runContextCheck(sessionId, cwd, 0, config);
       }
 
