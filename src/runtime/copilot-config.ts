@@ -256,22 +256,47 @@ function defaultPackageRoot(): string {
 
 /**
  * Resolve the value emitted into `hooks[<event>][].hooks[].command` as the
- * `omcp` invocation. The default flow:
+ * `omcp` invocation for general (non-hook) use sites.
  *
  *   1. If `omcp` resolves on PATH (npm-linked or globally installed shim)
  *      → return the literal `"omcp"`. Compact, portable, the common case.
  *   2. Otherwise → emit `node "<absolute path to dist/cli/omcp.js>"`.
- *      This is pre-mortem #1 from orchestrator-v1: when the user has not
- *      run `npm link` / `npm install -g`, the hook command still needs to
- *      dispatch to a valid Node script — the absolute path always works.
  *
- * The optional `omcpBin` argument on `MergeHookOptions` continues to take
- * precedence over this auto-detection — tests pass an explicit override to
- * avoid hitting `findExecutable` entirely.
+ * **For Copilot HOOK commands (`settings.json` `hooks` block), prefer
+ * `resolveHookCommandBin()` instead.** Hooks dispatched by Copilot's pwsh
+ * executor on Windows can hit Node's eval-stdin parser when going through
+ * the npm shim layer (the `.ps1` / `.cmd` wrappers), so for hooks we always
+ * emit the absolute-node form even when omcp is on PATH. omc's reference at
+ * `src/hooks/setup/index.ts:166` follows this same pattern.
  */
 export function resolveDefaultOmcpBin(opts: ResolveOmcpBinOptions = {}): string {
   const finder = opts.findOmcpOnPath ?? findExecutable;
   if (finder("omcp")) return "omcp";
+  const root = opts.packageRoot ?? defaultPackageRoot();
+  return `node "${join(root, "dist", "cli", "omcp.js")}"`;
+}
+
+/**
+ * Resolve the omcp invocation form used INSIDE Copilot `settings.json` hook
+ * commands. Unconditionally returns the absolute-node form
+ * (`node "<absolute path to dist/cli/omcp.js>"`).
+ *
+ * **Why unconditional**: the bare `omcp ...` form goes through the npm shim
+ * layer (`omcp.ps1` / `omcp.cmd`). When Copilot 1.0.52-4 on Windows
+ * dispatches hooks via `pwsh.exe -nop -nol -c "omcp hook fire X --json"`,
+ * the shim's stdin forwarding can fail in a way that puts Node into
+ * eval-stdin mode — Node treats the piped JSON payload as TypeScript source
+ * code and exits with SyntaxError + code 1. v1.0.0's Phase A smoke logged
+ * 42 such failures for PostToolUse alone (`docs/probes/L1-hook-dispatch-format.md`).
+ *
+ * The absolute-node form mirrors omc's `src/hooks/setup/index.ts:166`
+ * pattern and bypasses the shim layer entirely.
+ *
+ * The optional `omcpBin` argument on `MergeHookOptions` continues to take
+ * precedence — tests pass an explicit override to avoid hitting filesystem
+ * resolution entirely.
+ */
+export function resolveHookCommandBin(opts: ResolveOmcpBinOptions = {}): string {
   const root = opts.packageRoot ?? defaultPackageRoot();
   return `node "${join(root, "dist", "cli", "omcp.js")}"`;
 }
@@ -285,10 +310,13 @@ export function mergeCopilotHooks(
   existing: CopilotHooksMap | undefined,
   opts: MergeHookOptions = {},
 ): CopilotHooksMap {
-  // `opts.omcpBin` (explicit override) wins. Otherwise auto-detect via
-  // `resolveDefaultOmcpBin` so the absolute-path fallback kicks in when
-  // `omcp` is not on PATH (pre-mortem #1 closure).
-  const omcpBin = opts.omcpBin ?? resolveDefaultOmcpBin();
+  // `opts.omcpBin` (explicit override) wins. Otherwise use
+  // `resolveHookCommandBin()` which ALWAYS returns the absolute-node form
+  // (`node "<abs>" ...`) — bypassing the npm shim layer that causes
+  // Copilot's pwsh hook executor to trigger Node's eval-stdin SyntaxError
+  // on Windows. See `docs/probes/L1-hook-dispatch-format.md` for the
+  // root-cause investigation; mirrors omc's `src/hooks/setup/index.ts:166`.
+  const omcpBin = opts.omcpBin ?? resolveHookCommandBin();
   const timeout = opts.timeoutSec ?? 5;
   const events = opts.events ?? OMCP_HOOK_EVENTS;
   const next: CopilotHooksMap = {};

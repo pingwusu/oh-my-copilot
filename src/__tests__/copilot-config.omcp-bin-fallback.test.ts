@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   mergeCopilotHooks,
   resolveDefaultOmcpBin,
+  resolveHookCommandBin,
 } from "../runtime/copilot-config.js";
 
 // path.join uses the host platform's separator. Tests assert against the
@@ -102,16 +103,81 @@ describe("mergeCopilotHooks — auto-detection of omcpBin", () => {
     expect(cmd).toBe('node "/opt/foo/dist/cli/omcp.js" hook fire SessionStart --json');
   });
 
-  it("auto-detect path: when no omcpBin override, emits resolveDefaultOmcpBin() value", () => {
-    // We can't easily inject `findOmcpOnPath` into mergeCopilotHooks itself
-    // (the helper is private), so we assert the command is one of the two
-    // valid shapes: bare "omcp" if on PATH, or `node "..."` if not.
+  it("auto-detect path (L1.1): mergeCopilotHooks always emits absolute-node form, NEVER bare omcp", () => {
+    // L1.1 changed the contract: hook commands ALWAYS use the absolute-node
+    // form to bypass the npm shim layer (which caused Copilot's pwsh hook
+    // executor to trigger Node's eval-stdin SyntaxError on Windows). Even
+    // when `omcp` is on PATH, the hook command must NOT use the bare form.
     const result = mergeCopilotHooks(undefined, { events: ["SessionStart"] });
     const cmd = result["SessionStart"]![0]!.hooks[0]!.command;
-    const isBareForm = cmd === "omcp hook fire SessionStart --json";
-    const isAbsForm = /^node ".*dist[\\/]cli[\\/]omcp\.js" hook fire SessionStart --json$/.test(
-      cmd,
+    expect(cmd).not.toBe("omcp hook fire SessionStart --json");
+    expect(cmd).toMatch(
+      /^node ".*dist[\\/]cli[\\/]omcp\.js" hook fire SessionStart --json$/,
     );
-    expect(isBareForm || isAbsForm).toBe(true);
+  });
+});
+
+describe("resolveHookCommandBin (L1.1) — unconditional absolute-node form for hooks", () => {
+  it("returns node-wrapped absolute path even when omcp would be found on PATH", () => {
+    // Unlike resolveDefaultOmcpBin which prefers bare "omcp" when on PATH,
+    // resolveHookCommandBin must ALWAYS return the absolute-node form. This
+    // is the L1.1 fix that bypasses the .ps1/.cmd shim layer for hook
+    // dispatch under Copilot+pwsh on Windows.
+    const root = "/opt/oh-my-copilot";
+    const result = resolveHookCommandBin({ packageRoot: root });
+    expect(result).toBe(expectedPath(root));
+  });
+
+  it("does NOT consult findOmcpOnPath (unconditional absolute path)", () => {
+    let lookupCalls = 0;
+    const result = resolveHookCommandBin({
+      packageRoot: "/x",
+      findOmcpOnPath: () => {
+        lookupCalls += 1;
+        return "/usr/bin/omcp";
+      },
+    });
+    // Even though finder would say "omcp is on PATH at /usr/bin/omcp",
+    // the hook form must NOT use the bare omcp — it always emits node.
+    expect(result).toBe(expectedPath("/x"));
+    expect(lookupCalls).toBe(0);
+  });
+
+  it("handles Windows-style packageRoot with spaces (quoted form)", () => {
+    const root = "C:\\Program Files\\oh-my-copilot";
+    const result = resolveHookCommandBin({ packageRoot: root });
+    expect(result).toBe(expectedPath(root));
+    expect(result).toContain('"'); // quoted
+    expect(result).toContain("Program Files");
+  });
+
+  it("integration: every hook event uses absolute-node form via mergeCopilotHooks", () => {
+    // Cover all 13 OMCP_HOOK_EVENTS to confirm none accidentally fall back
+    // to the bare form. This is the regression test that pins L1.1.
+    const result = mergeCopilotHooks(undefined);
+    const eventNames = Object.keys(result);
+    expect(eventNames.length).toBeGreaterThanOrEqual(13);
+    for (const event of eventNames) {
+      const entry = result[event]?.[0]?.hooks[0];
+      expect(entry, `event ${event} should have a hook entry`).toBeDefined();
+      expect(entry!.command).toMatch(
+        new RegExp(
+          `^node ".*dist[\\\\/]cli[\\\\/]omcp\\.js" hook fire ${event} --json$`,
+        ),
+      );
+      expect(entry!.command).not.toMatch(/^omcp hook fire/);
+    }
+  });
+
+  it("Stop event consistency: same command shape as other events (Stop regression guard)", () => {
+    const result = mergeCopilotHooks(undefined, {
+      events: ["Stop", "PostToolUse", "UserPromptSubmit"],
+    });
+    const stopCmd = result["Stop"]![0]!.hooks[0]!.command;
+    const postCmd = result["PostToolUse"]![0]!.hooks[0]!.command;
+    const userCmd = result["UserPromptSubmit"]![0]!.hooks[0]!.command;
+    // Replace only the event-name segment; the rest must match.
+    expect(stopCmd.replace(/Stop/, "X")).toBe(postCmd.replace(/PostToolUse/, "X"));
+    expect(stopCmd.replace(/Stop/, "X")).toBe(userCmd.replace(/UserPromptSubmit/, "X"));
   });
 });
