@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Preemptive Compaction Hook
  *
  * Monitors context usage and warns before hitting the context limit.
@@ -25,6 +25,7 @@ import {
   CRITICAL_THRESHOLD,
   COMPACTION_COOLDOWN_MS,
   MAX_WARNINGS,
+  COMPACTION_REARM_EVERY,
   CLAUDE_DEFAULT_CONTEXT_LIMIT,
   CHARS_PER_TOKEN,
   CONTEXT_WARNING_MESSAGE,
@@ -42,7 +43,7 @@ const DEBUG_FILE = path.join(tmpdir(), "omcp-preemptive-compaction-debug.log");
  * Rapid-fire debounce window (ms).
  * When multiple tool outputs arrive within this window (e.g. simultaneous
  * subagent completions), only the first triggers context analysis.
- * Much shorter than COMPACTION_COOLDOWN_MS — specifically targets the
+ * Much shorter than COMPACTION_COOLDOWN_MS - specifically targets the
  * concurrent flood scenario.
  */
 export const RAPID_FIRE_DEBOUNCE_MS = 500;
@@ -80,11 +81,11 @@ const sessionStates = new Map<
   }
 >();
 
-// ─── State persistence (omcp state dir) ──────────────────────────────────────
+// --- State persistence (omcp state dir) --------------------------------------
 
 /**
  * Derive the state directory for preemptive-compaction under the project cwd.
- * Uses `.omcp/state/preemptive-compaction/` — consistent with omcp conventions.
+ * Uses `.omcp/state/preemptive-compaction/` -- consistent with omcp conventions.
  */
 function stateDir(cwd: string): string {
   return path.join(cwd, ".omcp", "state", "preemptive-compaction");
@@ -137,7 +138,7 @@ function persistState(
   }
 }
 
-// ─── Pure logic (exported for tests) ─────────────────────────────────────────
+// --- Pure logic (exported for tests) -----------------------------------------
 
 /**
  * Estimate tokens from text content
@@ -149,11 +150,19 @@ export function estimateTokens(text: string): number {
 /**
  * Estimate additional tokens contributed by ralph-state.json and progress.txt.
  *
+ * Only contributes when a ralph loop is currently active (`active === true`
+ * in ralph-state.json). Returns 0 when ralph is inactive so that hook tests
+ * using process.cwd() as cwd are not affected by stale state files.
+ *
  * These files grow as the ralph loop accumulates history and are the primary
  * driver of prompt-history size for long-running loops.  We read them from
  * the omcp state dir under `cwd` (best-effort: any I/O failure returns 0).
  */
 export function estimatePromptHistoryTokens(cwd: string): number {
+  // Guard: only count prompt-history bytes when ralph is active.
+  const { active } = readRalphState(cwd);
+  if (!active) return 0;
+
   let bytes = 0;
 
   const ralphStatePath = path.join(cwd, ".omcp", "state", "ralph-state.json");
@@ -165,10 +174,10 @@ export function estimatePromptHistoryTokens(cwd: string): number {
     // best-effort
   }
 
-  const progressPath = path.join(cwd, ".omcp", "progress.txt");
+  const progressTxtPath = path.join(cwd, ".omcp", "progress.txt");
   try {
-    if (fs.existsSync(progressPath)) {
-      bytes += fs.readFileSync(progressPath).length;
+    if (fs.existsSync(progressTxtPath)) {
+      bytes += fs.readFileSync(progressTxtPath).length;
     }
   } catch {
     // best-effort
@@ -210,7 +219,7 @@ export function analyzeContextUsage(
   };
 }
 
-// ─── Session state helpers ────────────────────────────────────────────────────
+// --- Session state helpers ----------------------------------------------------
 
 function getSessionState(
   sessionId: string,
@@ -234,12 +243,59 @@ function getSessionState(
   return state;
 }
 
+/**
+ * Read ralph loop state needed for re-arm and prompt-history estimation.
+ * Returns `{ iteration, active }` — both zero/false when the file is absent
+ * or unreadable.
+ */
+function readRalphState(cwd: string): { iteration: number; active: boolean } {
+  try {
+    const file = path.join(cwd, ".omcp", "state", "ralph-state.json");
+    if (!fs.existsSync(file)) return { iteration: 0, active: false };
+    const raw = fs.readFileSync(file, "utf-8");
+    const parsed = JSON.parse(raw) as { iteration?: unknown; active?: unknown };
+    const iteration =
+      typeof parsed.iteration === "number" && parsed.iteration >= 0
+        ? parsed.iteration
+        : 0;
+    const active = parsed.active === true;
+    return { iteration, active };
+  } catch {
+    // best-effort
+  }
+  return { iteration: 0, active: false };
+}
+
+/**
+ * Reset the warning counter if the current ralph iteration is a re-arm
+ * boundary (`iteration > 0 && iteration % rearmEvery === 0`).
+ *
+ * Iteration 0 means ralph is not active -- no re-arm.
+ */
+function maybeRearm(
+  state: { warningCount: number; lastWarningTime: number },
+  cwd: string,
+): void {
+  const { iteration } = readRalphState(cwd);
+  if (iteration <= 0) return;
+  const rearmEvery = COMPACTION_REARM_EVERY;
+  if (iteration % rearmEvery === 0) {
+    debugLog("re-arming warning counter", { iteration, rearmEvery });
+    state.warningCount = 0;
+    state.lastWarningTime = 0;
+  }
+}
+
 function shouldShowWarning(
   sessionId: string,
   cwd: string,
   config?: PreemptiveCompactionConfig,
 ): boolean {
   const state = getSessionState(sessionId, cwd);
+
+  // Re-arm check: reset counter at every N-th ralph iteration
+  maybeRearm(state, cwd);
+
   const cooldownMs = config?.cooldownMs ?? COMPACTION_COOLDOWN_MS;
   const maxWarnings = config?.maxWarnings ?? MAX_WARNINGS;
   const now = Date.now();
@@ -272,7 +328,7 @@ function recordWarning(sessionId: string, cwd: string): void {
   persistState(cwd, sessionId, state);
 }
 
-// ─── Core analysis logic (shared by PostToolUse + PreCompact) ─────────────────
+// --- Core analysis logic (shared by PostToolUse + PreCompact) ----------------
 
 function runContextCheck(
   sessionId: string,
@@ -283,8 +339,13 @@ function runContextCheck(
   const state = getSessionState(sessionId, cwd);
   state.estimatedTokens += additionalTokens;
 
+  // Include ralph-state.json + progress.txt in the token estimate so
+  // accumulated prompt-history size drives compaction warnings.
+  const promptHistoryTokens = estimatePromptHistoryTokens(cwd);
+  const totalEstimate = state.estimatedTokens + promptHistoryTokens;
+
   const usage = analyzeContextUsage(
-    "x".repeat(state.estimatedTokens * CHARS_PER_TOKEN),
+    "x".repeat(totalEstimate * CHARS_PER_TOKEN),
     config,
   );
 
@@ -302,6 +363,7 @@ function runContextCheck(
     sessionId,
     usageRatio: usage.usageRatio,
     isCritical: usage.isCritical,
+    promptHistoryTokens,
   });
 
   if (config?.customMessage) {
@@ -314,7 +376,7 @@ function runContextCheck(
   };
 }
 
-// ─── Hook factory ─────────────────────────────────────────────────────────────
+// --- Hook factory -------------------------------------------------------------
 
 /** Tools whose outputs are large enough to warrant a context check. */
 const LARGE_OUTPUT_TOOLS = new Set([
@@ -348,7 +410,7 @@ export function createPreemptiveCompactionHook(
 
       const { event, sessionId, cwd, toolName, toolResult } = ctx;
 
-      // ── PostToolUse ─────────────────────────────────────────────────────────
+      // -- PostToolUse ---------------------------------------------------------
       if (event === "PostToolUse") {
         if (!toolName || !toolResult) {
           return { kind: "noop" };
@@ -392,7 +454,7 @@ export function createPreemptiveCompactionHook(
         return runContextCheck(sessionId, cwd, responseTokens, config);
       }
 
-      // ── PreCompact ──────────────────────────────────────────────────────────
+      // -- PreCompact ----------------------------------------------------------
       if (event === "PreCompact") {
         // On PreCompact we check current cumulative estimate with no new tokens.
         // If already over threshold, warn; otherwise noop.
@@ -432,7 +494,7 @@ export function clearRapidFireDebounce(sessionId: string): void {
   lastAnalysisTime.delete(sessionId);
 }
 
-// ─── Re-exports ───────────────────────────────────────────────────────────────
+// --- Re-exports --------------------------------------------------------------
 
 export type { ContextUsageResult, PreemptiveCompactionConfig } from "./types.js";
 
@@ -441,6 +503,7 @@ export {
   CRITICAL_THRESHOLD,
   COMPACTION_COOLDOWN_MS,
   MAX_WARNINGS,
+  COMPACTION_REARM_EVERY,
   CLAUDE_DEFAULT_CONTEXT_LIMIT,
   CHARS_PER_TOKEN,
   CONTEXT_WARNING_MESSAGE,

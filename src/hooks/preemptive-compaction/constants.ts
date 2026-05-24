@@ -28,9 +28,25 @@ export const MIN_TOKENS_FOR_COMPACTION = 50_000;
 export const COMPACTION_COOLDOWN_MS = 60_000;
 
 /**
- * Maximum warnings per session before stopping
+ * Maximum warnings per cycle before stopping
  */
 export const MAX_WARNINGS = 3;
+
+/**
+ * Re-arm the warning counter every N ralph iterations.
+ * After this many iterations the warning count resets to zero, allowing the
+ * hook to fire again for long-running loops that would otherwise stay silent.
+ *
+ * Configurable via OMCP_COMPACTION_REARM_EVERY env var (integer ≥ 1).
+ */
+export const COMPACTION_REARM_EVERY: number = (() => {
+  const raw = process.env.OMCP_COMPACTION_REARM_EVERY;
+  if (raw !== undefined) {
+    const n = parseInt(raw, 10);
+    if (Number.isInteger(n) && n >= 1) return n;
+  }
+  return 5;
+})();
 
 /**
  * Heuristic context window size used to compute usage ratios.
