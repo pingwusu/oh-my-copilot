@@ -72,9 +72,9 @@ upstream-blocked on Copilot 1.0.53-2 + Windows.
 
 ## Part 2: Reproduction attempts
 
-All bench reproductions (`scripts/test-hook-dispatch.cjs`,
-`scripts/test-env-dispatch.cjs`, `scripts/test-node-options-dispatch.cjs`,
-`scripts/test-pwsh-quoting.cjs`) **FAILED to reproduce the eval_stdin bug**.
+All bench reproductions (`docs/probes/copilot-pwsh-dispatch/test-hook-dispatch.cjs`,
+`docs/probes/copilot-pwsh-dispatch/test-env-dispatch.cjs`, `docs/probes/copilot-pwsh-dispatch/test-node-options-dispatch.cjs`,
+`docs/probes/copilot-pwsh-dispatch/test-pwsh-quoting.cjs`) **FAILED to reproduce the eval_stdin bug**.
 
 | # | Form / Condition | Exit | eval_stdin? |
 |---|------------------|------|-------------|
@@ -246,10 +246,10 @@ it adds a fragility layer that triggers this bug.
 
 ### Bench scripts produced (for the next investigator)
 
-- `scripts/test-hook-dispatch.cjs` — 8 command-form variants
-- `scripts/test-env-dispatch.cjs` — 7 env-variant tests
-- `scripts/test-node-options-dispatch.cjs` — NODE_OPTIONS / pwsh / direct-node tests
-- `scripts/test-pwsh-quoting.cjs` — Windows quoting + windowsVerbatimArguments tests
+- `docs/probes/copilot-pwsh-dispatch/test-hook-dispatch.cjs` — 8 command-form variants
+- `docs/probes/copilot-pwsh-dispatch/test-env-dispatch.cjs` — 7 env-variant tests
+- `docs/probes/copilot-pwsh-dispatch/test-node-options-dispatch.cjs` — NODE_OPTIONS / pwsh / direct-node tests
+- `docs/probes/copilot-pwsh-dispatch/test-pwsh-quoting.cjs` — Windows quoting + windowsVerbatimArguments tests
 
 All scripts are deterministic and runnable via `node scripts/<name>.cjs` from
 repo root. None reproduce the live bug — that gap itself is the most useful

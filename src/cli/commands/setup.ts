@@ -137,6 +137,11 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
     );
 
     if (!skipDepsInstall) {
+      // `shell: process.platform === "win32"` is required so Node can find
+      // npm's `.cmd` shim via PATHEXT on Windows. Node 24 emits DEP0190
+      // (shell:true concatenates args, theoretical injection vector) — our
+      // args are static so the warning is a known false positive. v1.6
+      // follow-up could resolve npm.cmd to an absolute path to drop shell.
       const result = spawnSync(
         "npm",
         [

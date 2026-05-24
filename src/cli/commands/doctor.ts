@@ -3,9 +3,12 @@
 
 import { execSync } from "node:child_process";
 import {
+  closeSync,
   copyFileSync,
   existsSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   statSync,
 } from "node:fs";
@@ -248,9 +251,22 @@ export function runDoctor(): CheckResult[] {
 }
 
 /**
+ * Maximum number of bytes read from the tail of each Copilot log file.
+ * Hook errors are appended at runtime so the most recent failures live
+ * at the end. A 512 KB window covers ~5000 typical error stack frames
+ * — more than enough to surface the upstream pattern — without OOM
+ * risk on multi-MB session logs.
+ */
+const LOG_TAIL_BYTES = 512 * 1024;
+
+/**
  * Scan the most recent Copilot log file for the upstream Windows pwsh
  * dispatch bug signature (eval_stdin SyntaxError). Returns a doctor check
  * result; never throws (best-effort).
+ *
+ * Reads only the last LOG_TAIL_BYTES of the file so a multi-MB log
+ * doesn't block doctor for seconds or risk OOM. The bug signature
+ * repeats throughout long sessions, so the tail is sufficient.
  */
 export function probeHookDeliveryHealth(
   logsDir: string,
@@ -270,8 +286,27 @@ export function probeHookDeliveryHealth(
   }));
   stats.sort((a, b) => b.mtime - a.mtime);
   const latest = stats[0].f;
-  const content = readFileSync(join(logsDir, latest), "utf8");
+  const content = readLogTail(join(logsDir, latest));
   return analyzeHookDeliveryFromLog(content, latest);
+}
+
+/**
+ * Read the final LOG_TAIL_BYTES of a file as UTF-8. For files smaller
+ * than the window, returns the entire content. Exported for testing.
+ */
+export function readLogTail(filePath: string): string {
+  const stat = statSync(filePath);
+  if (stat.size <= LOG_TAIL_BYTES) {
+    return readFileSync(filePath, "utf8");
+  }
+  const fd = openSync(filePath, "r");
+  try {
+    const buf = Buffer.alloc(LOG_TAIL_BYTES);
+    readSync(fd, buf, 0, LOG_TAIL_BYTES, stat.size - LOG_TAIL_BYTES);
+    return buf.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**

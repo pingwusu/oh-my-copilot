@@ -23,6 +23,7 @@ import { join } from "node:path";
 import {
   analyzeHookDeliveryFromLog,
   probeHookDeliveryHealth,
+  readLogTail,
 } from "../cli/commands/doctor.js";
 
 // ── analyzeHookDeliveryFromLog (pure) ────────────────────────────────────────
@@ -165,5 +166,68 @@ at node:internal/main/eval_stdin:51:5
     expect(result.level).toBe("warn");
     expect(result.detail).toContain("eval_stdin failures");
     expect(result.detail).toContain("process-bug.log");
+  });
+});
+
+// ── readLogTail (large-file safety) ──────────────────────────────────────────
+
+describe("readLogTail (bounded log read)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "omcp-log-tail-"));
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("returns full content when file is smaller than the tail window", () => {
+    const file = join(tmp, "small.log");
+    const content = "tiny log content\nline 2\n";
+    writeFileSync(file, content);
+    expect(readLogTail(file)).toBe(content);
+  });
+
+  it("returns only the trailing 512KB when file exceeds the window", () => {
+    // Build a file that is window_size + filler so we can verify the tail
+    // contains only the trailing portion. Each row is fixed-width to make
+    // counting deterministic.
+    const file = join(tmp, "big.log");
+    const filler = "A".repeat(1024) + "\n"; // 1025 bytes per row
+    const tailMarker = "EVAL_STDIN_TAIL_MARKER";
+    // Write ~1 MB of filler, then the tail marker, then more filler so
+    // the marker lands inside the last 512KB window.
+    const HEAD_SIZE = 768 * 1024; // 768 KB head (outside window)
+    const headRows = Math.ceil(HEAD_SIZE / filler.length);
+    let body = filler.repeat(headRows);
+    body += tailMarker + "\n";
+    // Pad after the marker so the marker is in the middle of the tail.
+    body += filler.repeat(100); // ~100 KB after marker
+    writeFileSync(file, body);
+
+    const tail = readLogTail(file);
+    expect(tail.length).toBeLessThanOrEqual(512 * 1024);
+    expect(tail).toContain(tailMarker);
+    // The first byte of the file ("A" inside filler) should be cut off.
+    // (Concretely: the tail should NOT contain ALL the head filler — only
+    // the trailing chunk of it.)
+    expect(tail.length).toBeLessThan(body.length);
+  });
+
+  it("tail-read of a huge log still surfaces a trailing eval_stdin signature", () => {
+    const file = join(tmp, "huge.log");
+    const filler = "B".repeat(2048) + "\n";
+    const errorBlock = `[ERROR] HookExitCodeError: code 1
+at node:internal/main/eval_stdin:51:5
+`;
+    // 1 MB filler + error block at the end (well inside the 512KB window).
+    const body = filler.repeat(500) + errorBlock;
+    writeFileSync(file, body);
+
+    const tail = readLogTail(file);
+    const verdict = analyzeHookDeliveryFromLog(tail, "huge.log");
+    expect(verdict.level).toBe("warn");
+    expect(verdict.detail).toContain("eval_stdin failures");
   });
 });
