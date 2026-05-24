@@ -47,15 +47,69 @@ The 4 live Copilot smokes from the plan's Phase Z gate table are **deferred to a
 | L2.9 team multi-agent | SOFT | ✓ per-worker tests | **DEFERRED** — needs 4-worker concurrent run + merge |
 | L3.6 30-iter ralph | SOFT | ✓ unit + integration | **DEFERRED** — synthetic 30-story PRD, ~30min live ralph |
 
-## v1.2.0 follow-ups (carry forward)
+## Post-v1.1.0 investigation (this session, after tag)
 
-1. **L1 hook dispatch residual** — investigate the 27 remaining PostToolUse "code 1" errors after L1.1. Hypothesis: Copilot's pwsh dispatch handles multi-arg + large-JSON-stdin pathologically. Possible fix: wrapper `.cjs` dispatch script + sentinel-token protocol. Tracked in `docs/probes/L1-hook-dispatch-format.md` synthesis section.
-2. **L2.5b team phase controller** — actual phase-transition orchestrator with crash-restart resume (omc-style). v1.1.0 has the schema (current_phase + stage_history) but no transition logic. Deferred per Critic iter-1 of the plan.
-3. **L2.4 prompt-template fix if needed** — if live verify-phase smoke shows Copilot wraps verdict in reasoning block, switch detectVerdict from line-only to sentinel-tag (`<verdict>APPROVE</verdict>`).
-4. **Worker-side shutdown ack** — L2.7 implements orchestrator-side request + wait + SIGTERM-fallback. Worker-side ack write (in Copilot skill prompts) is still pending.
-5. **L3.6 wall-clock instrumentation** — long-run smoke + observability dashboard (process-log analysis).
-6. **`npm pack && npm install -g <.tgz>` CI gate** — closes the npm-link-vs-real-install fidelity gap surfaced in v1.0.0's Architect iter-2.
-7. **Daemon mode (Option O-B)** + **modifiedArgs surgeon (Phase 7)** — original orchestrator-v1 deferrals; gated on real-user demand.
+After tagging v1.1.0 (`8338dae`), 3 commits landed during follow-up investigation:
+
+| Commit | What | Verdict |
+|---|---|---|
+| `54ba0a5` | L1.2 wrapper-script fix attempt (`scripts/omcp-hook-dispatch.cjs` + single-arg `node "<abs>/dispatcher.cjs" <event>` hook command form) | Architect+Critic APPROVE'd implementation. Live smoke produced same 27 errors. |
+| `6fbb48b` | **REVERT** of L1.2 wrapper attempt | No measurable benefit per live smoke; reverted per YAGNI. |
+| `bb229cd` | Hermetic test isolation in `preemptive-compaction.test.ts` (clears `.omcp/state/ralph-state.json` + `progress.txt` in beforeEach) | Caught a flake L3.2 introduced; alignment commit `7c1fb2e` missed it because it only surfaces after live ralph state pollutes cwd. |
+
+### Live smoke results post-v1.1.0
+
+| Smoke | Result |
+|---|---|
+| **L2.3 ralplan→ralph handoff** | **PASS** ✓ — pre-populated boulder + ran `omcp ralph` "if there's an active boulder plan, execute it" → ralph picked up the plan, wrote `.omcp-smoke/handoff-result.txt` with exact expected content, exit 0 |
+| **L1.2 deep re-smoke (wrapper-script form)** | PARTIAL — 27 PostToolUse errors persisted (same as L1.1). Confirmed upstream Copilot CLI bug regardless of command-form. Tested against Copilot 1.0.53-1, same behavior. |
+
+### Definitive L1 upstream-bug RCA
+
+**Root cause confirmed**: Copilot CLI on Windows (1.0.52-4 + 1.0.53-1 tested) dispatches hooks via `pwsh.exe -nop -nol -c "<command>"` with JSON piped to pwsh stdin. For some events (PostToolUse + UserPromptSubmit + SessionStart most reliably), the dispatch chain invokes `node` WITHOUT the script-file argument. Node 24's TypeScript-strip-mode then treats stdin as TS source code and SyntaxError-exits.
+
+Tried 3 command forms in settings.json, all produce the SAME error pattern:
+- bare `omcp hook fire <event> --json` (v1.0.0)
+- absolute-node `node "<abs>" hook fire <event> --json` (v1.1.0 L1.1 — best so far at 42→27 errors)
+- wrapper `node "<abs>/dispatcher.cjs" <event>` (L1.2 attempted, reverted — 27 errors)
+
+This is exactly the class of upstream bug omc documented (`$CLAUDE_PLUGIN_ROOT` not expanding under pwsh). omcp cannot fix from its side; **needs upstream Copilot CLI fix OR a fundamentally different dispatch path**.
+
+---
+
+## v1.2.0 follow-ups (carry forward, prioritized)
+
+### Tier 1 — high user-facing value
+
+1. **L1.3 — Stop-side compaction-advice delivery (upstream-bug workaround)**.
+   The `preemptive-compaction` hook currently subscribes to PostToolUse + PreCompact. PostToolUse delivery is broken by the upstream bug (the L1.2 RCA), so the 85%-context advisory + `/compact` recommendation never reaches Copilot. **Stop hook works perfectly** (smoke 0 failures). Move the threshold-check + advise emission to ALSO fire on the Stop event (per-turn granularity instead of per-tool). Combined with L3.2's `estimatePromptHistoryTokens` (reads ralph-state.json + progress.txt independently of hook delivery), this completely routes around the upstream bug for compaction.
+   - Why high-value: directly restores omcp's long-running stability (30+ iter ralph workflows). Without this, sessions risk hitting hard context limits and either truncating silently or stalling.
+   - Estimated cost: 1-2 hours. Edit `preemptive-compaction/index.ts` to add Stop to its subscriptions, move threshold-check into Stop branch, update tests, run smoke.
+   - Acceptance: `omcp ralph` with 30+ iter PRD shows advise text injected at correct iteration; user sees auto-`/compact` in Copilot.
+
+2. **L1 upstream bug report** — file an issue against Copilot CLI repo with the eval_stdin stack trace + the 3 command-form reproductions. Worth doing even if no immediate response — establishes paper trail.
+
+### Tier 2 — feature completion from v1.1 plan
+
+3. **L2.5b — team phase controller** (omc-style). v1.1.0 has `current_phase` + `stage_history` schema (L2.5a) but no transition logic. Add the orchestrator that drives plan → exec → verify → fix transitions with crash-restart resume. Deferred per Critic iter-1 of the v1.1 plan.
+
+4. **L2.4 prompt-template fix if needed** — IF live verify-phase smoke (deferred) shows Copilot wraps verdict in reasoning block, switch `detectVerdict` from line-only to sentinel-tag (`<verdict>APPROVE</verdict>`).
+
+5. **Worker-side shutdown ack writer** — L2.7 implements orchestrator-side request + wait + SIGTERM-fallback. Worker-side ack write (in Copilot skill prompts) is still pending. Belongs in `skills/ralph/SKILL.md` (or similar) instructions.
+
+### Tier 3 — release-verify smokes (deferred from v1.1)
+
+6. **L2.4 live verify-phase smoke** — run against real Copilot sub-processes with a known submission, capture raw stdout, validate detectVerdict matches.
+
+7. **L2.9 live team multi-agent smoke** — 4-worker concurrent PRD, verify shard-merge reconciles, all stories complete.
+
+8. **L3.6 live 30-iteration ralph smoke** — synthetic PRD, verify progress.txt cap activates, compaction re-arm fires, crash recovery doesn't mis-fire. Most directly affected by L1.3 if/when that's implemented.
+
+### Tier 4 — infrastructure
+
+9. **`npm pack && npm install -g <.tgz>` CI gate** — closes the npm-link-vs-real-install fidelity gap surfaced in v1.0.0's Architect iter-2.
+
+10. **Daemon mode (Option O-B)** + **modifiedArgs surgeon (Phase 7)** — original orchestrator-v1 deferrals; gated on real-user demand.
 
 ---
 
