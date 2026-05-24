@@ -163,6 +163,46 @@ describe("appendProgressNote — cap honored", () => {
     expect(bytes).toBeLessThanOrEqual(500);
   });
 
+  it("7. getRalphContext with oversized file injects only tail", () => {
+    // Write progress.txt directly (bypass appendProgressNote) to simulate
+    // an externally-written oversized file. Use 2 * default cap bytes.
+    const cap = 65536; // default OMCP_PROGRESS_MAX_BYTES
+    const omcpDir = join(cwd, ".omcp");
+    const { mkdirSync, writeFileSync } = require("node:fs");
+    mkdirSync(omcpDir, { recursive: true });
+
+    // Build content: many lines so we have clean \n boundaries in the tail
+    // Total size = 2 * cap = 128 KiB
+    const lineBody = "x".repeat(99); // 100 bytes per line (99 + \n)
+    const lineCount = Math.ceil((cap * 2) / 100) + 1;
+    const lines: string[] = [];
+    for (let i = 0; i < lineCount; i++) {
+      lines.push(`line-${String(i).padStart(6, "0")}-${lineBody.slice(0, 90)}`);
+    }
+    const oversizedContent = lines.join("\n") + "\n";
+    writeFileSync(join(omcpDir, "progress.txt"), oversizedContent, "utf-8");
+
+    const ctx = getRalphContext(cwd);
+    expect(ctx).toContain("<progress-notes>");
+
+    const match = ctx.match(/<progress-notes>([\s\S]*?)<\/progress-notes>/);
+    expect(match).not.toBeNull();
+    const injected = match![1]!.trim();
+
+    // Must be <= cap bytes
+    const injectedBytes = Buffer.byteLength(injected, "utf-8");
+    expect(injectedBytes).toBeLessThanOrEqual(cap);
+
+    // Must end with content from the tail of the original file
+    const lastLine = lines[lines.length - 1]!;
+    expect(injected).toContain(lastLine);
+
+    // Must start at a clean line boundary (first char is not mid-line garbage)
+    // i.e. the character before the first content char in the raw slice was \n
+    // We verify this by checking the injected string starts with "line-" prefix
+    expect(injected.trimStart()).toMatch(/^line-/);
+  });
+
   it("6. getRalphContext returns post-truncation content (not stale)", () => {
     process.env["OMCP_PROGRESS_MAX_BYTES"] = "500";
     // Write entries that exceed the cap

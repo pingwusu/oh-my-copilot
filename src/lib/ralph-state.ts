@@ -470,7 +470,21 @@ function formatPrdStatusSummary(status: PRDStatus): string {
 export function getRalphContext(worktreeRoot?: string): string {
   const parts: string[] = [];
 
-  const progress = readProgressNotes(worktreeRoot);
+  let progress = readProgressNotes(worktreeRoot);
+  if (progress) {
+    const cap = progressCapBytes();
+    const byteLen = Buffer.byteLength(progress, "utf-8");
+    if (byteLen > cap) {
+      // Defensive tail-only read: file is oversized (e.g. external write).
+      // Slice to the last `cap` bytes then align forward to the next \n so we
+      // never inject a partial UTF-8 codepoint or a mid-line fragment.
+      const buf = Buffer.from(progress, "utf-8");
+      const tailBuf = buf.subarray(buf.length - cap);
+      const tailStr = tailBuf.toString("utf-8");
+      const newlineIdx = tailStr.indexOf("\n");
+      progress = newlineIdx === -1 ? tailStr : tailStr.slice(newlineIdx + 1);
+    }
+  }
   if (progress.trim()) {
     parts.push(`<progress-notes>\n${progress.trimEnd()}\n</progress-notes>\n`);
   }
