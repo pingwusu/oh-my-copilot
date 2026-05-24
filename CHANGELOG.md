@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-24
+
+### Notable — orchestrator hardening: L1 upstream workaround + L2.5b phase controller + L2.7 ack completion
+
+Continues from v1.1.0 with 4 Tier 1+2 follow-ups landed against the
+upstream Copilot CLI hook-dispatch bug and the team-coordination gaps.
+
+Tests: 1044 → 1082 passing (+38), 2 skipped, 0 failed (1 pre-existing
+worker-fork EPERM baseline unchanged since v0.4.0). Build: tsc clean.
+
+### Tier 1 — Upstream-bug workaround
+
+- `113df30` **L1.3**: preemptive-compaction now subscribes to **Stop**
+  in addition to PostToolUse + PreCompact. Routes around the upstream
+  Copilot CLI hook-dispatch bug (`node:internal/main/eval_stdin`
+  SyntaxError on PostToolUse — Copilot 1.0.52-4 + 1.0.53-1 both
+  affected). Stop hook fires reliably (0 failures in all smokes), so
+  the `/compact` context-warning advisory now reaches Copilot for
+  long-running ralph sessions even when PostToolUse delivery is
+  broken upstream. Reuses L3.2's `estimatePromptHistoryTokens` for an
+  independent token-estimate signal that doesn't depend on per-tool
+  accumulation. +7 tests covering subscription, threshold check,
+  MAX_WARNINGS cap, re-arm boundary, and `estimatePromptHistoryTokens`-only
+  path (zero PostToolUse signal, simulating the worst-case upstream-bug
+  scenario).
+- `docs/upstream-reports/copilot-cli-hook-eval-stdin.md` (new):
+  github.com/github/copilot-cli issue draft documenting the upstream
+  dispatch bug with full reproduction + investigation evidence. User
+  files the actual issue.
+
+### Tier 2 — Multi-agent coordination completion
+
+- `c50ccf7` **L2.7 completion**: new CLI verb
+  `omcp team-ack <session-id> <worker-index>` for worker-side shutdown
+  acknowledgment. Completes the protocol whose orchestrator-side was
+  shipped in v1.1.0 (`c6d39c3`). Worker prompts can now deterministically
+  write `worker-K-ack.json` via the CLI when they detect a
+  `shutdown-request.json` marker — unblocking the orchestrator's
+  30s wait loop. assertSafeSlug on sessionId; integer guard on
+  workerIndex; idempotent rewrite; 9 tests. `eaddb4c` adds defense-in-depth
+  guards inside `runTeamAck` itself (was only validated in the CLI
+  wrapper; Critic iter-1 of v1.2 flagged it).
+  `docs/workflows/team-shutdown-protocol.md` documents the full
+  request/ack/SIGTERM-fallback protocol.
+
+- `fb67cf2` **L2.5b**: team phase-transition controller atop L2.5a's
+  schema. New `transitionPhase(sessionId, target, reason?)` helper in
+  `mode-state.ts` with `VALID_TEAM_TRANSITIONS` state-machine guard
+  (omc's actual 6-value enum: initializing | planning | executing |
+  fixing | completed | failed). New CLI verb `omcp team-collect
+  <session-id>` (in `team-phase-controller.ts`) inspects pidfiles +
+  shard files to determine `executing → completed/failed` transitions.
+  Crash-restart detection: dead worker without shard → `failed` with
+  stage_history entry. Idempotent on terminal phases. `team.ts` now
+  correctly writes `current_phase: 'initializing'` before spawn and
+  transitions to `'executing'` after both tmux + detached spawn paths
+  (corrects an L2.5a labeling). 25 tests (15 unit + 10 integration
+  including crash-restart, partial crash, dead-with-shard, and v1.1.0
+  legacy state back-compat).
+
+### What's still pending (carry forward to v1.3.0)
+
+- Live smokes (release-verify, not blocking): L2.4 verify-phase against
+  real Copilot, L2.9 team multi-agent (4 workers), L3.6 30-iteration
+  ralph long-run.
+- Upstream Copilot CLI hook-dispatch fix (file issue, monitor for
+  resolution).
+- Worker-side shutdown ack writer in the Copilot **skill prompts**
+  themselves (v1.2.0 ships the CLI verb that workers will call;
+  the skill-side instruction to call it lives in `docs/workflows/`
+  for now — needs to be inlined into the ralph skill or a new
+  team-worker skill in a follow-up).
+- L2.5b's `fixing` phase has outgoing edges but no incoming (no
+  caller writes it). Add a v1.3 path that detects shard merge
+  conflicts and transitions to `fixing`.
+- L2.4 prompt-template fix if live smoke shows detectVerdict needs
+  sentinel-tag matching.
+- Daemon mode (Option O-B) + modifiedArgs surgeon (Phase 7) — original
+  orchestrator-v1 deferrals; gated on user demand.
+
 ## [1.1.0] — 2026-05-24
 
 ### Notable — orchestrator-complete (L1 + L2 + L3 of the deep-dive plan)

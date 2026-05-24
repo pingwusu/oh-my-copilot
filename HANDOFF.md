@@ -1,11 +1,32 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-24 mid-day (v1.1.0 cut — orchestrate-complete across L1+L2+L3; 4 live smokes deferred to release-verify)
+**Updated**: 2026-05-24 evening (v1.2.0 cut — Tier 1+2 follow-ups landed: L1.3 upstream-bug workaround + L2.7 worker ack + L2.5b phase controller)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z v1.1.0 release commit
-**Version**: **v1.1.0** (orchestrate-complete; cut this session as Phase Z deliverable atop v1.0.0)
-**Tests**: 1044 passing, 0 failed, 2 skipped (+65 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
+**Latest commit**: see `git log -1` — Phase Z v1.2.0 release commit
+**Version**: **v1.2.0** (orchestrate hardening; cut this session as the post-v1.1.0 Tier 1+2 deliverable)
+**Tests**: 1082 passing, 0 failed, 2 skipped (+38 from v1.1.0 baseline 1044, +103 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
+
+---
+
+## v1.2.0 deliverables (this session)
+
+4 commits + 1 hygiene patch atop v1.1.0:
+
+| Commit | Phase | Title |
+|---|---|---|
+| `113df30` | L1.3 | feat(compaction): Stop-side advise delivery — upstream-bug workaround |
+| `c50ccf7` | L2.7-ack | feat(team): omcp team-ack CLI verb for worker-side shutdown protocol |
+| `fb67cf2` | L2.5b | feat(team): phase-transition controller with crash-restart detection |
+| `eaddb4c` | hygiene | fix(team): defense-in-depth assertSafeSlug + integer guard in runTeamAck (Critic iter-1) |
+| (this)   | Z | chore(release): v1.2.0 |
+
+Plus `docs/upstream-reports/copilot-cli-hook-eval-stdin.md` (new) — drafted GitHub issue body for upstream Copilot CLI hook-dispatch bug (no commit, user files the actual issue).
+
+team+critic verification was applied per phase per "执行标准跟之前一样" directive:
+- Architect APPROVE all 3 (113df30, c50ccf7, fb67cf2)
+- Critic APPROVE all 3 with 1 MINOR finding on c50ccf7 (defense-in-depth gap in runTeamAck) — fixed in `eaddb4c` before release.
+- No disagreement → no tie-breaker needed.
 
 ---
 
