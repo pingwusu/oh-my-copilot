@@ -1,15 +1,86 @@
 # omcp 续接 handoff
 
-**Updated**: 2026-05-24 late-night (v1.5.0 cut — MCP plugin-install deps fix + upstream pwsh dispatch bug detection)
+**Updated**: 2026-05-25 early-morning (v1.6.0 cut — mode.ts outer-loop for ralph iteration advance, LIVE-VERIFIED past gate)
 **Repo**: `C:\Users\runjiashi\oh-my-copilot-r2` (the **r2**, not the parallel `oh-my-copilot/`)
-**Latest commit**: see `git log -1` — Phase Z v1.5.0 release commit
-**Version**: **v1.5.0** (MCP deps + doctor pwsh detection; cut this session atop v1.4.0)
-**Tests**: 1156 passing, 0 failed, 2 skipped (+23 from v1.4.0 baseline 1133, +177 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
+**Latest commit**: see `git log -1` — Phase Z v1.6.0 release commit
+**Version**: **v1.6.0** (outer-loop ralph; cut this session atop v1.5.0; FIRST tag since v1.3 with live iteration-advance proven)
+**Tests**: 1167 passing, 0 failed, 2 skipped (+11 from v1.5.0 baseline 1156, +188 from v1.0.0 baseline 979), 1 pre-existing Windows worker-fork EPERM baseline unchanged since v0.4.0
 **Build**: `npm run build` clean (tsc no diagnostics)
 
 ---
 
-## v1.5.0 deliverables (this session)
+## v1.6.0 deliverables (this session)
+
+User critique driving v1.6: "为什么一直在叠加版本号，而不是在某一个版本
+解决遇到的问题" — why keep stacking version numbers instead of solving
+the problem in one version. v1.3 L3.6 smoke first surfaced
+"iteration counter stuck at 1"; v1.4 + v1.5 shipped tags without fixing
+it. v1.6 ships the actual fix and **gates the tag on live verification**
+that the iteration counter advances past 1.
+
+2 commits + tag atop v1.5.0 (a7b2ffc):
+
+| Commit | Phase | Title |
+|---|---|---|
+| `8152969` | docs | docs(upstream): v1.6 path A + B artifacts — upstream issue body draft + sparkshell deferred |
+| `a06e3b8` | feat | feat(mode): v1.6 outer-loop for ralph iteration advance (zero Stop-hook dependency) |
+| (this) | Z | chore(release): v1.6.0 |
+
+Tag gate result (see `docs/smoke/v1.6-outer-loop-smoke.md`): live smoke
+on Copilot 1.0.53-2 Windows with 3-story PRD + `--max-iterations 2`
+produced final `ralph-state.json` with **`iteration: 2`** — the first
+time live since v1.3 that the counter is observably > 1.
+
+### Approach decided this session (all-paths)
+
+After v1.5 cut, user requested 3 parallel paths (Path A: file upstream
+issue; Path B: sparkshell .exe wrapper; Path C: mode.ts outer-loop):
+- **Path A**: blocked at EMU auth layer; issue body draft ready in
+  docs/upstream-reports/copilot-pwsh-dispatch-issue-body.md
+- **Path B**: deferred to vN+1+ (no sparkshell crate, no Rust toolchain,
+  hypothesis unverifiable since bench can't reproduce live failure)
+- **Path C**: implemented + live-verified — this is what makes v1.6
+  the real fix
+
+### team+critic per fix (same standard as v1.1-v1.5)
+
+- Architect APPROVE-WITH-FINDINGS on the WIP outer-loop. Found:
+  - C1: existing crash-recovery test 2 fails (expected single-spawn
+    semantics, broke under multi-iteration default)
+  - M3: clearModeState inside loop violated mutual-exclusion invariant
+  - A1: no input validation on maxOuterIterations <= 0
+- Critic REVISE on the WIP outer-loop. Same findings + recommended
+  - M4: test 4 doesn't assert final state after max-exhaustion
+  - M1 + M2: stall detection + continuation context missing (deferred
+    to v1.7)
+- All blocking findings addressed in a06e3b8 before tag.
+
+### Architecture summary
+
+Pre-v1.6: `omcp ralph` spawned `copilot --autopilot --yolo` ONCE; relied
+on Copilot's Stop event firing into omcp's hook handler to increment
+the iteration counter. Upstream Copilot Windows pwsh dispatch bug
+prevented the hook from ever executing live (eval_stdin SyntaxError x36
+in the v1.4 smoke). Iteration counter stuck at 1 across 3 releases.
+
+v1.6: `mode.ts` wraps the spawn in a while-loop:
+```
+while (iteration ≤ maxOuter) {
+  writeRalphState({iteration, outerLoopOwned: true, ...})
+  spawnSyncCrossPlatform("copilot", args)
+  if non-zero exit → restore preSpawn + break
+  if PRD allComplete → break
+  if architectApproved → break
+  iteration++
+}
+```
+
+The Stop hook code path is preserved for the day upstream fixes the
+dispatch bug; `outerLoopOwned: true` tells `checkRalph` to defer
+(return noop) so the iteration counter doesn't double-advance when
+both paths are operational.
+
+## v1.5.0 deliverables (history)
 
 5 commits atop v1.4.0:
 

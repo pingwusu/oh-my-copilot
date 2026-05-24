@@ -7,6 +7,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-24
+
+### Notable — mode.ts outer-loop ralph iteration advance (live-verified)
+
+After user critique on v1.3-v1.5 ("为什么一直在叠加版本号，而不是在某一个
+版本解决遇到的问题" — "why keep stacking version numbers instead of
+solving the problem in one version"), v1.6 ships the actual fix for the
+ralph iteration-counter-advance issue that v1.3 L3.6 smoke first
+surfaced and that v1.4 + v1.5 tags shipped without resolving.
+
+Tag gate this version: live smoke MUST show `ralph-state.iteration > 1`.
+PASSED — see docs/smoke/v1.6-outer-loop-smoke.md.
+
+Tests: 1156 → 1167 passing (+11 new, including 5 outer-loop tests +
+hardening updates), 2 skipped, 0 failed (1 pre-existing worker-fork
+EPERM baseline unchanged since v0.4.0). Build: tsc clean.
+
+### Tier 1 — Path C: mode.ts outer-loop (the real fix)
+
+- `a06e3b8` **feat(mode): v1.6 outer-loop for ralph iteration advance
+  (zero Stop-hook dependency)**. Replaces single-spawn ralph mode with
+  a while-loop in `mode.ts` that wraps `spawnSyncCrossPlatform("copilot",
+  ...)`. Each iteration writes ralph-state with `iteration: N` +
+  `outerLoopOwned: true` BEFORE spawn, post-spawn re-reads PRD, and
+  iterates until: PRD complete / architect-approved / non-zero exit /
+  `--max-iterations` cap reached.
+
+  The `outerLoopOwned: true` flag is the dedup guard — when the
+  upstream Copilot pwsh dispatch bug eventually gets fixed and Stop
+  hook fires again, `checkRalph` sees this flag and returns noop
+  instead of double-incrementing the iteration counter.
+
+  Files changed:
+  - src/lib/ralph-state.ts — `outerLoopOwned?: boolean` on RalphState
+    + read-side whitelist passthrough
+  - src/cli/commands/mode.ts — outer while-loop; clearModeState moved
+    to termination paths only (preserves mutual-exclusion lock between
+    iterations); input validation clamps maxOuter to >=1
+  - src/cli/omcp.ts — `--max-iterations <n>` CLI flag; clarified
+    `--max-continues` help text (caps PER-SPAWN turns, not outer count)
+  - src/hooks/persistent-mode/index.ts — early-return guard in
+    checkRalph for `outerLoopOwned`
+
+  Tests: src/__tests__/ralph-outer-loop.integration.test.ts adds 5
+  deterministic vitest assertions covering happy path, crash recovery,
+  hook guard, max-iterations cap with state assertion, and
+  maxOuterIterations clamp for invalid input.
+
+### Tier 1 — Path A + B (artifacts)
+
+- `8152969` **docs(upstream): v1.6 path A + B artifacts**. Filing the
+  upstream Copilot pwsh dispatch issue at github/copilot-cli was
+  BLOCKED at the auth layer (runjiashi_microsoft is an EMU account;
+  `gh issue create` returns "Unauthorized: As an Enterprise Managed
+  User, you cannot access this content"). The issue body is ready at
+  docs/upstream-reports/copilot-pwsh-dispatch-issue-body.md for manual
+  filing via a non-EMU account.
+
+  Sparkshell .exe wrapper investigation (Path B) deferred — crates/
+  sparkshell does not exist (M3 milestone, greenfield), no Rust
+  toolchain on the dev machine, and the bench-vs-live gap that v1.5
+  identified means there's no deterministic way to validate sparkshell-
+  hook before shipping. Report at docs/upstream-reports/copilot-pwsh-
+  dispatch-v1.6-sparkshell-investigation.md.
+
+### Tier 2 — Live smoke artifact
+
+- `docs/smoke/v1.6-outer-loop-smoke.md` — first live evidence of
+  ralph-state.iteration advancing past 1 since v1.3. 3-story PRD
+  with `--max-continues 1 --max-iterations 2` produced final state
+  `{iteration: 2, outerLoopOwned: false, active: true}` — the tag
+  gate the user set after the v1.5 retrospective.
+
+### Known gaps (deferred to v1.7+)
+
+- **M1 stall detection** (critic finding): outer loop has no
+  "if 0 PRD progress in N consecutive iterations, bail" circuit
+  breaker. Worst case: 20 wasted spawns. `maxOuterIterations` cap
+  is the only safety net today.
+- **M2 continuation context injection** (critic finding): iteration
+  2+ spawns reuse the same prompt; Copilot starts fresh each spawn
+  without seeing progress.txt or PRD status injected. Token cost
+  ~2x vs. single-session.
+- **Architect-approval detection via Stop context text** is silenced
+  during outer-loop mode (hook returns noop on outerLoopOwned).
+  The outer loop only sees architectApproved if it was set BEFORE
+  the run. Users should rely on PRD `passes:true` as the completion
+  signal under v1.6.
+- **Upstream Copilot pwsh dispatch bug**: still present; the outer
+  loop makes it irrelevant for iteration advance but Stop hook
+  delivery (and thus L1.3 compaction advise + per-tool-call hook
+  features) remains broken on Windows 1.0.53-2 until upstream fixes.
+- **HUD flicker** during multi-iteration runs (clearModeState gap)
+  was mitigated by moving the clear out of the loop (architect M3
+  finding addressed).
+
+### What's still pending (carry forward to v1.7.0)
+
+- File the upstream issue via a non-EMU account
+- L3.6-style long-run smoke (10+ stories) on v1.6 outer-loop
+- L2.4 verify-phase + L2.9 team multi-agent live smokes (deferred
+  since v1.2)
+- Stall detection + continuation context (the two critic findings)
+- DEP0190 deprecation warning during `omcp setup` (deferred since v1.5)
+
 ## [1.5.0] — 2026-05-24
 
 ### Notable — MCP plugin-install deps + upstream pwsh dispatch bug detection
