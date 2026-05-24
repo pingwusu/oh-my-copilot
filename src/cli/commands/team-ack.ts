@@ -35,6 +35,16 @@ export function runTeamAck(opts: TeamAckOptions): TeamAckResult {
   const { sessionId, workerIndex } = opts;
   const cwd = opts.cwd ?? process.cwd();
 
+  // Defense-in-depth (Critic iter-1 of v1.2): even though runTeamAckCli already
+  // validates sessionId, programmatic callers that skip the CLI wrapper must
+  // not be able to slip a path-traversal slug through.
+  assertSafeSlug(sessionId, "session-id");
+  if (!Number.isInteger(workerIndex) || workerIndex < 0) {
+    throw new Error(
+      `runTeamAck: workerIndex must be a non-negative integer (got: ${workerIndex})`,
+    );
+  }
+
   const ackDir = join(cwd, ".omcp", "state", "team", sessionId);
   mkdirSync(ackDir, { recursive: true });
 
