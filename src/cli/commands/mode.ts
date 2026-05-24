@@ -239,7 +239,15 @@ export function runMode(opts: ModeOptions): number {
   if (opts.allowAllTools !== false) args.push("--allow-all-tools");
   if (opts.silent) args.push("-s");
   if (LOOPING_MODES.has(opts.mode)) {
-    args.push("--autopilot");
+    // Canonical Copilot non-interactive invocation per official docs:
+    //   copilot --autopilot --yolo --max-autopilot-continues N -p "..."
+    // --yolo is a permission-bundle shortcut (--allow-all-tools
+    // --allow-all-paths --allow-all-urls). Has no effect on hook dispatch
+    // (verified via app.js scan + permissions help text). Required to
+    // suppress mid-loop permission prompts that would otherwise stall the
+    // loop on novel tools / paths. See
+    // docs/upstream-reports/copilot-yolo-flag-investigation.md.
+    args.push("--autopilot", "--yolo");
     if (opts.maxContinues !== undefined) {
       args.push("--max-autopilot-continues", String(opts.maxContinues));
     }
