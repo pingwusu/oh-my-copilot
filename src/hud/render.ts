@@ -39,11 +39,12 @@ function renderModes(state: HudState): string {
 
 function renderRalphLegacy(state: HudState): string {
   const r = state.ralph;
-  if (!r) return "";
+  if (!r || !r.active) return "";
   const iter = Number.isFinite(r.iteration) ? r.iteration : null;
   const max = Number.isFinite(r.maxIterations) ? r.maxIterations : null;
   if (iter === null && max === null) return "";
-  return `${iter ?? ""}/${max ?? ""}`;
+  if (max !== null && max > 0) return `${iter ?? ""}/${max}`;
+  return `${iter ?? ""}`;
 }
 
 function renderTeamLegacy(state: HudState): string {

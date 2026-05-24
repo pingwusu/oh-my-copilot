@@ -252,3 +252,144 @@ describe("loadHudState — reads from .omcp/state", () => {
     expect(state.priorityNote).toBe("Hello world note");
   });
 });
+
+describe("renderHud — columns 3-5 wiring (v1.3)", () => {
+  let cwd: string;
+  beforeEach(() => {
+    resetGitCache();
+    cwd = mkdtempSync(join(tmpdir(), "omcp-hud-col-"));
+  });
+
+  const env = { OMCP_HOME: "/no-such-dir", OMCP_MODEL_FAMILY: "" };
+
+  function stateDir(base: string) {
+    return join(base, ".omcp", "state");
+  }
+
+  // Test 1: no state files → columns 3-5 all show "-"
+  it("no state files → columns 3,4,5 show dash (regression)", () => {
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts.length).toBeGreaterThanOrEqual(6);
+    expect(parts[2]).toBe("-"); // modes
+    expect(parts[3]).toBe("-"); // ralph
+    expect(parts[4]).toBe("-"); // team
+  });
+
+  // Test 2: ralph-state.json active=true → column 4 shows iter count
+  it("ralph-state active=true → column 4 shows iter/max", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ralph-state.json"),
+      JSON.stringify({ active: true, iteration: 3, max_iterations: 8 }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[3]).toBe("3/8");
+  });
+
+  // Test 3: ralph-state active=false (and iteration=0) → column 4 shows dash.
+  // The state loader treats iter>0 as active for backward compat; a stopped
+  // ralph session resets iteration to 0 before writing active:false.
+  it("ralph-state active=false, iteration=0 → column 4 shows dash", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ralph-state.json"),
+      JSON.stringify({ active: false, iteration: 0, max_iterations: 5 }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[3]).toBe("-");
+  });
+
+  // Test 4: ralph-state.json present → column 3 shows "ralph" mode
+  it("ralph-state active=true → column 3 shows ralph in modes", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ralph-state.json"),
+      JSON.stringify({ active: true, iteration: 1, max_iterations: 10 }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[2]).toBe("ralph");
+  });
+
+  // Test 5: ralph-state.json + team-state.json both active → column 3 shows comma-joined
+  it("ralph + team both active → column 3 shows comma-joined modes", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ralph-state.json"),
+      JSON.stringify({ active: true, iteration: 1, max_iterations: 5 }),
+      "utf8",
+    );
+    writeFileSync(
+      join(dir, "team-state.json"),
+      JSON.stringify({ active: true, spawned: 4, done: 1 }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[2]).toContain("ralph");
+    expect(parts[2]).toContain("team");
+    expect(parts[2]).toContain(",");
+  });
+
+  // Test 6: team-state.json with spawned=2, done=1 → column 5 shows "1/2"
+  it("team-state with done=1 spawned=2 → column 5 shows 1/2", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "team-state.json"),
+      JSON.stringify({ active: true, spawned: 2, done: 1 }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[4]).toBe("1/2");
+  });
+
+  // Test 7: partial state (only ralph active) → team and note columns stay "-"
+  it("only ralph active → team and note columns remain dash", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ralph-state.json"),
+      JSON.stringify({ active: true, iteration: 2, max_iterations: 6 }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[4]).toBe("-"); // team still dash
+    expect(parts[5]).toBe("-"); // note still dash
+  });
+
+  // Test 8: extended mode candidates (plan, ccg, learner) are detected
+  it("plan-state.json active=true → column 3 shows plan", () => {
+    const dir = stateDir(cwd);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "plan-state.json"),
+      JSON.stringify({ active: true }),
+      "utf8",
+    );
+    const state = loadHudState(cwd, env);
+    expect(state.activeModes).toContain("plan");
+    const line = renderHud(state);
+    const parts = line.split(" · ");
+    expect(parts[2]).toBe("plan");
+  });
+});

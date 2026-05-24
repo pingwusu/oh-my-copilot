@@ -90,7 +90,14 @@ export function readActiveModes(cwd: string): string[] {
     "ultraqa",
     "team",
     "sciomc",
+    "plan",
     "ralplan",
+    "ccg",
+    "learner",
+    "deep-interview",
+    "deep-dive",
+    "external-context",
+    "ai-slop-cleaner",
   ];
   for (const m of candidates) {
     const obj = asObject(readJsonSafe(join(stateDir(cwd), `${m}-state.json`)));
