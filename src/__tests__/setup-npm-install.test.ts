@@ -154,6 +154,30 @@ describe("setup writes minimal runtime package.json + runs npm install (v1.5)", 
     );
   });
 
+  it("test 4b: EACCES from spawn → status-null path includes errno code + permission hint", async () => {
+    // Critic/test-engineer H-1: previously this returned "(exit unknown)"
+    // with no errno code surfaced. v1.5 includes result.error.code in the
+    // thrown message so the user sees "EACCES" + "permission" hint.
+    spawnSyncMock.mockImplementationOnce(
+      () =>
+        ({
+          status: null,
+          pid: 0,
+          stdout: Buffer.from(""),
+          stderr: Buffer.from(""),
+          output: [],
+          signal: null,
+          error: Object.assign(new Error("spawn npm EACCES"), {
+            code: "EACCES",
+          }),
+        }) as ReturnType<typeof import("node:child_process").spawnSync>,
+    );
+
+    await expect(runSetup({ packageRoot: PACKAGE_ROOT })).rejects.toThrow(
+      /EACCES.*permission|permission.*EACCES/i,
+    );
+  });
+
   it("test 4: ENOENT from spawn → npm-not-found error with install hint", async () => {
     spawnSyncMock.mockImplementationOnce(
       () =>

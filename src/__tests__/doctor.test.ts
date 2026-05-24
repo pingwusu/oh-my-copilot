@@ -37,6 +37,26 @@ describe("doctor checks", () => {
     expect(checks.find((c) => c.name === "plugin manifest")?.level).toBe("ok");
   });
 
+  it("check 9 (hook delivery health) wired: runDoctor surfaces eval_stdin warn when logs dir has matching process-*.log", () => {
+    // Test-engineer H-2: previously no integration test exercised the
+    // runDoctor → probeHookDeliveryHealth wiring. The try/catch at
+    // doctor.ts:235-248 swallows probe exceptions into a "warn" with
+    // "unable to probe" — meaning a wiring regression (wrong logsDir
+    // path, swapped check name) would be invisible to the suite.
+    const logsDir = join(tmp, "logs");
+    mkdirSync(logsDir, { recursive: true });
+    writeFileSync(
+      join(logsDir, "process-test.log"),
+      "[ERROR] HookExitCodeError: Hook command failed with code 1\nat node:internal/main/eval_stdin:51:5\n",
+    );
+    const checks = runDoctor();
+    const probe = checks.find((c) => c.name === "hook delivery health");
+    expect(probe).toBeDefined();
+    expect(probe!.level).toBe("warn");
+    expect(probe!.detail).toContain("eval_stdin");
+    expect(probe!.detail).toContain("process-test.log");
+  });
+
   it("exit code reflects highest severity", () => {
     expect(exitCodeFor([{ name: "x", level: "ok", detail: "" }])).toBe(0);
     expect(exitCodeFor([{ name: "x", level: "warn", detail: "" }])).toBe(1);

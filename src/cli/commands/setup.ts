@@ -165,10 +165,15 @@ export async function runSetup(opts: SetupOptions): Promise<SetupReport> {
         );
       }
       if (result.status !== 0) {
+        const errCode = result.error
+          ? (result.error as NodeJS.ErrnoException).code
+          : undefined;
         throw new Error(
-          `npm install failed (exit ${result.status ?? "unknown"}) in ` +
-            `${paths.omcpPluginDir}. Check network connectivity and that ` +
-            `node_modules is writable. Re-run \`omcp setup\` after resolving.`,
+          `npm install failed (exit ${result.status ?? "unknown"}${
+            errCode ? `, ${errCode}` : ""
+          }) in ${paths.omcpPluginDir}. Check network connectivity and that ` +
+            `node_modules is writable (permission denied if EACCES/EPERM). ` +
+            `Re-run \`omcp setup\` after resolving.`,
         );
       }
       depsInstalled = true;
