@@ -30,13 +30,22 @@ import {
 import type { StopContext } from "../../lib/todo-state.js";
 
 /**
- * Extract a StopContext from the raw HookContext toolArgs/toolResult fields.
+ * Extract a StopContext from the raw HookContext payload / toolArgs / toolResult.
  *
- * Copilot passes the stop payload as `toolArgs` on the Stop event.
- * Accept any object shape — missing fields default to undefined.
+ * Copilot 1.0.53+ emits Stop fields directly on the stdin payload root
+ * (snake_case: stop_reason, transcript_path, ...). The v1.4 RCA fix added
+ * ctx.payload to carry that raw payload. Older host CLIs surface stop
+ * context via toolArgs/toolResult instead. Prefer ctx.payload so we see
+ * Copilot's real stop_reason on Stop events; fall back to legacy locations
+ * for non-Copilot hosts. Without this fallback the isContextLimitStop /
+ * isRateLimitStop / isAuthenticationError guards are blind on real Copilot
+ * Stop payloads (the same v1.4 bug we fixed for persistent-mode).
  */
 function extractStopContext(ctx: HookContext): StopContext {
-  const raw = (ctx.toolArgs ?? ctx.toolResult ?? {}) as Record<string, unknown>;
+  const raw = (ctx.payload ?? ctx.toolArgs ?? ctx.toolResult ?? {}) as Record<
+    string,
+    unknown
+  >;
   return {
     stop_reason: raw.stop_reason as string | undefined,
     stopReason: raw.stopReason as string | undefined,

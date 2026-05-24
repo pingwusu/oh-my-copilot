@@ -420,6 +420,50 @@ const VALID_EVENTS: HookEvent[] = [
 ];
 
 /**
+ * Build a HookContext (minus `event`) from a raw stdin payload.
+ *
+ * Exported as a pure function so the field-mapping logic can be tested
+ * without spawning a subprocess or mocking stdin. The mapping rules:
+ *
+ * - `sessionId`: accept both `sessionId` (camelCase, canonical CC) and
+ *   `session_id` (snake_case, Copilot vsCodeCompat path). Empty string
+ *   if neither is present.
+ * - `cwd`: prefer payload's `cwd`, fall back to `fallbackCwd` arg
+ *   (typically `opts.cwd ?? process.cwd()` at the caller).
+ * - `toolName` / `toolArgs` / `toolResult`: camelCase pass-through for
+ *   tool-related events. Undefined for events that don't emit them.
+ * - `payload`: the raw payload itself, preserved as-emitted. Hooks use
+ *   this for event-specific snake_case fields (Stop's `stop_reason`,
+ *   `transcript_path`, etc.) that aren't directly mapped above.
+ *
+ * Copilot's vsCodeCompat serializer (`iJi` in app.js) emits snake_case
+ * fields on the payload root; the camelCase fallback path emits
+ * sessionId / transcriptPath / etc. This function accepts either form.
+ */
+export function buildHookContextFromPayload(
+  rawPayload: Record<string, unknown>,
+  fallbackCwd: string,
+): Omit<HookContext, "event"> {
+  const sessionId =
+    typeof rawPayload.sessionId === "string"
+      ? rawPayload.sessionId
+      : typeof rawPayload.session_id === "string"
+        ? rawPayload.session_id
+        : "";
+  return {
+    sessionId,
+    cwd: typeof rawPayload.cwd === "string" ? rawPayload.cwd : fallbackCwd,
+    toolName:
+      typeof rawPayload.toolName === "string"
+        ? rawPayload.toolName
+        : undefined,
+    toolArgs: rawPayload.toolArgs,
+    toolResult: rawPayload.toolResult,
+    payload: rawPayload,
+  };
+}
+
+/**
  * Execute all hooks for `opts.event` and write results to stdout.
  *
  * Copilot stdout protocol fields produced (JSON mode only):
@@ -443,26 +487,11 @@ export async function runFireCli(opts: RunFireCliOpts): Promise<number> {
   const event = opts.event as HookEvent;
   const stdinPayload = await readStdinJson();
   const cwd = opts.cwd ?? process.cwd();
-  // Copilot's vsCodeCompat path emits snake_case fields (session_id, cwd,
-  // stop_reason, transcript_path, ...). The camelCase fallback path emits
-  // sessionId, transcriptPath, etc. We accept either form so omcp works
-  // regardless of which serializer Copilot picks for a given event.
   const rawPayload = stdinPayload as Record<string, unknown>;
-  const sessionIdFromPayload =
-    typeof rawPayload.sessionId === "string"
-      ? rawPayload.sessionId
-      : typeof rawPayload.session_id === "string"
-        ? rawPayload.session_id
-        : "";
-  const ctx: Omit<HookContext, "event"> = {
-    sessionId: sessionIdFromPayload,
-    cwd: typeof stdinPayload.cwd === "string" ? stdinPayload.cwd : cwd,
-    toolName:
-      typeof stdinPayload.toolName === "string" ? stdinPayload.toolName : undefined,
-    toolArgs: stdinPayload.toolArgs,
-    toolResult: stdinPayload.toolResult,
-    payload: rawPayload,
-  };
+  const ctx: Omit<HookContext, "event"> = buildHookContextFromPayload(
+    rawPayload,
+    cwd,
+  );
   const entries = await fireHooks(event, ctx, opts.loadOptions ?? { env: opts.env, cwd });
   if (opts.json) {
     // Build summary fields for the Copilot stdout protocol.

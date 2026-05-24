@@ -232,6 +232,94 @@ describe("todo-continuation", () => {
     expect(hook.name).toBe("todo-continuation");
   });
 
+  // ── 14b. v1.4 payload-path coverage ─────────────────────────────────────
+  //
+  // Copilot 1.0.53+ emits Stop fields directly on the stdin payload root
+  // (snake_case stop_reason, transcript_path, ...). runFireCli puts that
+  // raw payload onto ctx.payload. extractStopContext must read from
+  // ctx.payload — not just toolArgs/toolResult — or the bail-out guards
+  // (isContextLimitStop, isRateLimitStop, isAuthenticationError,
+  // isExplicitCancelCommand) are blind on real Copilot Stop payloads.
+  // These tests would have failed before the v1.4 fix; they pass after.
+
+  it("payload path: context_limit stop → noop (bail-out via ctx.payload, not toolArgs)", async () => {
+    writeTodos(cwd, [{ content: "Unfinished task", status: "pending" }]);
+    const hook = createTodoContinuationHook();
+    const ctx: HookContext = {
+      event: "Stop",
+      sessionId: "test-session-1",
+      cwd,
+      payload: { stop_reason: "context_limit" },
+    };
+    const result = await hook.run(ctx);
+    expect(result).toEqual({ kind: "noop" });
+  });
+
+  it("payload path: rate_limit stop → noop (bail-out via ctx.payload)", async () => {
+    writeTodos(cwd, [{ content: "Unfinished task", status: "pending" }]);
+    const hook = createTodoContinuationHook();
+    const ctx: HookContext = {
+      event: "Stop",
+      sessionId: "test-session-1",
+      cwd,
+      payload: { stop_reason: "rate_limit" },
+    };
+    const result = await hook.run(ctx);
+    expect(result).toEqual({ kind: "noop" });
+  });
+
+  it("payload path: authentication_error stop → noop (bail-out via ctx.payload)", async () => {
+    writeTodos(cwd, [{ content: "Unfinished task", status: "pending" }]);
+    const hook = createTodoContinuationHook();
+    const ctx: HookContext = {
+      event: "Stop",
+      sessionId: "test-session-1",
+      cwd,
+      payload: { stop_reason: "authentication_error" },
+    };
+    const result = await hook.run(ctx);
+    expect(result).toEqual({ kind: "noop" });
+  });
+
+  it("payload path: real Copilot snake_case end_turn payload + pending todos → advise (end_turn is not a bail-out reason)", async () => {
+    writeTodos(cwd, [{ content: "Unfinished task", status: "pending" }]);
+    const hook = createTodoContinuationHook();
+    const ctx: HookContext = {
+      event: "Stop",
+      sessionId: "c87cb78f-e572-49cd-8851-029792f68513",
+      cwd,
+      payload: {
+        hook_event_name: "Stop",
+        session_id: "c87cb78f-e572-49cd-8851-029792f68513",
+        timestamp: "2026-05-24T09:14:39.328Z",
+        cwd,
+        transcript_path: path.join(
+          cwd,
+          ".copilot",
+          "session-state",
+          "x",
+          "events.jsonl",
+        ),
+        stop_reason: "end_turn",
+      },
+    };
+    const result = await hook.run(ctx);
+    expect(result.kind).toBe("advise");
+  });
+
+  it("payload path: explicit /cancel command via payload.prompt → noop", async () => {
+    writeTodos(cwd, [{ content: "Unfinished task", status: "pending" }]);
+    const hook = createTodoContinuationHook();
+    const ctx: HookContext = {
+      event: "Stop",
+      sessionId: "test-session-1",
+      cwd,
+      payload: { prompt: "/cancel" },
+    };
+    const result = await hook.run(ctx);
+    expect(result).toEqual({ kind: "noop" });
+  });
+
   // ── 15. advise text includes status summary ───────────────────────────────
 
   it("advise text includes todo status summary line", async () => {
