@@ -218,8 +218,8 @@ const VALID_TEAM_TRANSITIONS: ReadonlyMap<TeamPhase, ReadonlySet<TeamPhase>> =
   new Map([
     ["initializing", new Set<TeamPhase>(["planning", "executing", "failed"])],
     ["planning", new Set<TeamPhase>(["executing", "failed"])],
-    ["executing", new Set<TeamPhase>(["completed", "failed"])],
-    // 'fixing' has no incoming edges in v1.2.0 — reserved for reassignment UX
+    ["executing", new Set<TeamPhase>(["completed", "failed", "fixing"])],
+    // 'fixing' incoming edge added in v1.3.0 — triggered by shard-merge conflicts
     ["fixing", new Set<TeamPhase>(["completed", "failed"])],
     ["completed", new Set<TeamPhase>()],
     ["failed", new Set<TeamPhase>()],
