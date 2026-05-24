@@ -50,6 +50,8 @@ import { runStateTodo } from "./commands/state-todo.js";
 import { runStateUltrawork } from "./commands/state-ultrawork.js";
 import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam, runTeamMergeShards, runTeamWatchdog } from "./commands/team.js";
+import { runTeamCollect } from "./commands/team-phase-controller.js";
+import { runTeamAckCli } from "./commands/team-ack.js";
 import {
   formatTeleportList,
   listTeleports,
@@ -293,6 +295,38 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         console.warn(line);
       }
       process.exitCode = stuck.length > 0 ? 1 : 0;
+    });
+
+  program
+    .command("team-ack <session-id> <worker-index>")
+    .description(
+      "Write worker-side shutdown ack — call when shutdown-request.json is detected (L2.7 protocol)",
+    )
+    .action((sessionId: string, workerIndex: string) => {
+      process.exitCode = runTeamAckCli(sessionId, workerIndex);
+    });
+
+  program
+    .command("team-collect <session-id>")
+    .description(
+      "Inspect worker shards + pidfile health and transition team phase to completed/failed",
+    )
+    .action((sessionId: string) => {
+      const report = runTeamCollect(sessionId);
+      console.log(`omcp team-collect: session=${report.sessionId}`);
+      console.log(`  finalPhase:         ${report.finalPhase}`);
+      console.log(`  workers checked:    ${report.workers.length}`);
+      console.log(`  allShardsPresent:   ${report.allShardsPresent}`);
+      console.log(`  hasDeadWithoutShard:${report.hasDeadWithoutShard}`);
+      for (const line of report.logLines) {
+        console.log(line);
+      }
+      process.exitCode =
+        report.finalPhase === "completed"
+          ? 0
+          : report.finalPhase === "failed"
+            ? 1
+            : 0;
     });
 
   // ralph gets extra --prd and --resume options.
