@@ -20,11 +20,13 @@ import { detectVerdict } from "../../lib/ralph-state.js";
 export interface VerifyPhaseOptions {
   phaseId: string;
   maxIterations?: number;
+  /** Seconds to wait per architect/critic subprocess before SIGTERM. Default 600. */
+  timeout?: number;
   /** Test hook — defaults to real spawnSync against `copilot`. */
   spawn?: (
     bin: string,
     args: string[],
-  ) => Pick<SpawnSyncReturns<Buffer>, "status" | "stdout" | "stderr">;
+  ) => Pick<SpawnSyncReturns<Buffer>, "status" | "stdout" | "stderr" | "signal">;
   /** Test hook — override cwd used for state files. */
   cwd?: string;
   /** Test hook — injectable submission reader. */
@@ -60,6 +62,7 @@ const CRITIC_PROMPT_TEMPLATE = (submission: string) =>
 export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
   const cwd = opts.cwd ?? process.cwd();
   const maxIterations = opts.maxIterations ?? 5;
+  const timeout = opts.timeout ?? 600;
 
   // Validate phase-id via assertSafeSlug (invariant 1).
   let phaseId: string;
@@ -73,7 +76,12 @@ export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
   const doSpawn =
     opts.spawn ??
     ((bin: string, args: string[]) =>
-      spawnSync(bin, args, { encoding: "buffer", shell: false }));
+      spawnSync(bin, args, {
+        encoding: "buffer",
+        shell: false,
+        timeout: timeout * 1000,
+        killSignal: "SIGTERM",
+      }));
 
   const doReadSubmission =
     opts.readSubmission ??
@@ -98,19 +106,33 @@ export function runVerifyPhase(opts: VerifyPhaseOptions): VerifyPhaseResult {
     // Spawn architect with a fresh session (no --resume / --inject).
     const architectArgs = ["-p", ARCHITECT_PROMPT_TEMPLATE(submission), "--allow-all-tools"];
     const architectResult = doSpawn("copilot", architectArgs);
+    if (architectResult.status === null) {
+      console.error(
+        `omcp verify-phase: architect subprocess timed out (signal=${architectResult.signal ?? "unknown"}) — treating as ITERATE`,
+      );
+    }
     const architectStdout =
-      architectResult.stdout instanceof Buffer
-        ? architectResult.stdout.toString("utf8")
-        : String(architectResult.stdout ?? "");
+      architectResult.status === null
+        ? ""
+        : architectResult.stdout instanceof Buffer
+          ? architectResult.stdout.toString("utf8")
+          : String(architectResult.stdout ?? "");
     const architectVerdict = detectVerdict(architectStdout);
 
     // Spawn critic with an independent session id (never injected into architect's session).
     const criticArgs = ["-p", CRITIC_PROMPT_TEMPLATE(submission), "--allow-all-tools"];
     const criticResult = doSpawn("copilot", criticArgs);
+    if (criticResult.status === null) {
+      console.error(
+        `omcp verify-phase: critic subprocess timed out (signal=${criticResult.signal ?? "unknown"}) — treating as ITERATE`,
+      );
+    }
     const criticStdout =
-      criticResult.stdout instanceof Buffer
-        ? criticResult.stdout.toString("utf8")
-        : String(criticResult.stdout ?? "");
+      criticResult.status === null
+        ? ""
+        : criticResult.stdout instanceof Buffer
+          ? criticResult.stdout.toString("utf8")
+          : String(criticResult.stdout ?? "");
     const criticVerdict = detectVerdict(criticStdout);
 
     const isReject =

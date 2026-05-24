@@ -243,4 +243,74 @@ describe("runVerifyPhase", () => {
     const rec = JSON.parse(readFileSync(rejectPath, "utf8"));
     expect(rec.outcome).toBe("REJECT");
   });
+
+  // ── timeout option ─────────────────────────────────────────────────────────
+
+  it("defaults timeout to 600 when not provided (spawn receives no extra timeout arg via injection)", () => {
+    // When timeout is omitted, runVerifyPhase should still work correctly —
+    // the default of 600 is applied inside the real-spawnSync path, but the
+    // injected spawn is called with the same signature regardless.
+    writeSubmission(dir, "timeout-default");
+    const spawn = mockSpawn("\nAPPROVE\n");
+    const r = runVerifyPhase({ phaseId: "timeout-default", cwd: dir, spawn });
+    // Default behaviour: both APPROVE → exit 0.
+    expect(r.exitCode).toBe(0);
+    expect(r.iterations).toBe(1);
+  });
+
+  it("accepts an explicit timeout option without affecting pass/fail outcome", () => {
+    writeSubmission(dir, "timeout-explicit");
+    const spawn = mockSpawn("\nAPPROVE\n");
+    const r = runVerifyPhase({ phaseId: "timeout-explicit", timeout: 30, cwd: dir, spawn });
+    expect(r.exitCode).toBe(0);
+    expect(r.iterations).toBe(1);
+  });
+
+  it("treats a timed-out architect spawn (status=null, signal=SIGTERM) as ITERATE, not a crash", () => {
+    writeSubmission(dir, "timeout-architect");
+    // First two calls simulate architect timeout then critic ITERATE (both → no verdict → ITERATE loop).
+    // Subsequent calls: APPROVE + APPROVE to exit cleanly within maxIterations.
+    let call = 0;
+    const spawn = vi.fn((_bin: string, _args: string[]) => {
+      call++;
+      if (call === 1) {
+        // Architect on iteration 1: timed out.
+        return { status: null as null, stdout: Buffer.from("", "utf8"), stderr: Buffer.from("", "utf8"), signal: "SIGTERM" as NodeJS.Signals };
+      }
+      if (call === 2) {
+        // Critic on iteration 1: normal ITERATE.
+        return { status: 0, stdout: Buffer.from("\nITERATE\n", "utf8"), stderr: Buffer.from("", "utf8"), signal: null };
+      }
+      // Iteration 2: both APPROVE.
+      return { status: 0, stdout: Buffer.from("\nAPPROVE\n", "utf8"), stderr: Buffer.from("", "utf8"), signal: null };
+    });
+    const r = runVerifyPhase({ phaseId: "timeout-architect", timeout: 5, maxIterations: 3, cwd: dir, spawn });
+    // Should survive the timeout and eventually reach APPROVE.
+    expect(r.exitCode).toBe(0);
+    expect(r.iterations).toBe(2);
+    // Timeout warning must appear in stderr.
+    expect(errs.join("\n")).toContain("timed out");
+  });
+
+  it("treats a timed-out critic spawn (status=null, signal=SIGTERM) as ITERATE, not a crash", () => {
+    writeSubmission(dir, "timeout-critic");
+    let call = 0;
+    const spawn = vi.fn((_bin: string, _args: string[]) => {
+      call++;
+      if (call === 1) {
+        // Architect on iteration 1: normal APPROVE.
+        return { status: 0, stdout: Buffer.from("\nAPPROVE\n", "utf8"), stderr: Buffer.from("", "utf8"), signal: null };
+      }
+      if (call === 2) {
+        // Critic on iteration 1: timed out.
+        return { status: null as null, stdout: Buffer.from("", "utf8"), stderr: Buffer.from("", "utf8"), signal: "SIGTERM" as NodeJS.Signals };
+      }
+      // Iteration 2: both APPROVE.
+      return { status: 0, stdout: Buffer.from("\nAPPROVE\n", "utf8"), stderr: Buffer.from("", "utf8"), signal: null };
+    });
+    const r = runVerifyPhase({ phaseId: "timeout-critic", timeout: 5, maxIterations: 3, cwd: dir, spawn });
+    expect(r.exitCode).toBe(0);
+    expect(r.iterations).toBe(2);
+    expect(errs.join("\n")).toContain("timed out");
+  });
 });

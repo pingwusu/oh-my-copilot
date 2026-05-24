@@ -665,8 +665,14 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       (v) => Number(v),
       5,
     )
-    .action((phaseId: string, opts: { maxIterations?: number }) => {
-      const r = runVerifyPhase({ phaseId, maxIterations: opts.maxIterations });
+    .option(
+      "--timeout <seconds>",
+      "max seconds to wait per architect/critic subprocess (default 600)",
+      parseFloat,
+      600,
+    )
+    .action((phaseId: string, opts: { maxIterations?: number; timeout?: number }) => {
+      const r = runVerifyPhase({ phaseId, maxIterations: opts.maxIterations, timeout: opts.timeout });
       process.exitCode = r.exitCode;
     });
 
