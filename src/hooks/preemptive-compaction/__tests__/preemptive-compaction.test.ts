@@ -1,3 +1,5 @@
+import { existsSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -106,15 +108,39 @@ describe("createPreemptiveCompactionHook", () => {
     maxWarnings: MAX_WARNINGS,
   };
 
+  // L3.2 introduced `estimatePromptHistoryTokens` which reads
+  // `.omcp/state/ralph-state.json` + `.omcp/progress.txt` relative to the
+  // hook's cwd when ralph is active. The test runs at process.cwd() (the
+  // project root), so any leftover state from a prior live ralph smoke
+  // pollutes the token estimator. Clean those files in beforeEach +
+  // afterEach so the test environment is hermetic.
+  function clearRalphStateInCwd() {
+    for (const rel of [
+      ".omcp/state/ralph-state.json",
+      ".omcp/progress.txt",
+    ]) {
+      const p = join(CWD, rel);
+      if (existsSync(p)) {
+        try {
+          unlinkSync(p);
+        } catch {
+          // Best-effort; tolerate races.
+        }
+      }
+    }
+  }
+
   beforeEach(() => {
     resetSessionTokenEstimate(SESSION);
     clearRapidFireDebounce(SESSION);
+    clearRalphStateInCwd();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
     resetSessionTokenEstimate(SESSION);
     clearRapidFireDebounce(SESSION);
+    clearRalphStateInCwd();
     vi.useRealTimers();
   });
 
