@@ -3,8 +3,8 @@
 //
 // Maps to: copilot -p "/oh-my-copilot:<mode> <task>" --allow-all-tools [--autopilot]
 //
-// Modes that imply long-running loops (ralph, autopilot, ultrawork, ultraqa,
-// sciomc) get `--autopilot` automatically so Copilot keeps continuing until
+// Modes that imply long-running loops (ralph, autopilot, ultrawork, team)
+// get `--autopilot` automatically so Copilot keeps continuing until
 // the skill emits a completion signal or the user cancels.
 
 import { randomUUID } from "node:crypto";
@@ -97,8 +97,6 @@ const LOOPING_MODES = new Set([
   "ralph",
   "autopilot",
   "ultrawork",
-  "ultraqa",
-  "sciomc",
   "team",
 ]);
 
@@ -308,10 +306,9 @@ export function runMode(opts: ModeOptions): number {
   // tells checkRalph in persistent-mode/index.ts to defer (return
   // noop) instead of double-incrementing.
   //
-  // Non-ralph modes (autopilot, ultrawork, ultraqa, sciomc, team,
-  // ralplan, and all one-shot modes) keep the single-spawn behavior
-  // — they don't have a PRD-driven completion criterion the outer
-  // loop could check.
+  // Non-ralph modes (autopilot, ultrawork, team, ralplan, and all
+  // one-shot modes) keep the single-spawn behavior — they don't have
+  // a PRD-driven completion criterion the outer loop could check.
   let result: ReturnType<typeof spawnSyncCrossPlatform>;
 
   if (opts.mode === "ralph") {

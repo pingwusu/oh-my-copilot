@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+- `ultraqa` and `sciomc` modes removed from default LOOPING_MODES per
+  iter-3 plan Section L#2 auto-triage option C. Both modes lacked
+  state-module implementations (`src/lib/ultraqa-*.ts` / `src/lib/sciomc-*.ts`
+  never existed). Multi-direction triage evaluated (A) shared-mode-state only,
+  (B) build minimal state modules, (C) CHANGELOG-tagged removal — chose C
+  because the alternatives delivered no user value (mode names existed but
+  no skill content backed them). Removed cleanly to honor the "no kicking
+  can" principle. May be re-introduced in a future minor with full skill
+  content + state module + e2e verification.
+
 ## [1.7.0] — 2026-05-25
 
 ### Notable — outer-loop hardening + DEP0190 resolved + 5 of 6 v1.4 carry-forwards closed

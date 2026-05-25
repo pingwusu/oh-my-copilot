@@ -120,18 +120,22 @@ describe("runMode args — looping modes must include --autopilot AND --yolo (ca
     expect(args).toContain("--yolo");
   });
 
-  it("ultraqa mode pushes both --autopilot and --yolo", () => {
+  it("ultraqa mode (removed from LOOPING_MODES) pushes neither --autopilot nor --yolo", () => {
+    // ultraqa removed from LOOPING_MODES per v1.8 iter-3 plan Section L#2
+    // option C — state-module backing never existed.
     runMode({ mode: "ultraqa", task: "test" });
     const args = getCapturedArgs(spawnMock);
-    expect(args).toContain("--autopilot");
-    expect(args).toContain("--yolo");
+    expect(args).not.toContain("--autopilot");
+    expect(args).not.toContain("--yolo");
   });
 
-  it("sciomc mode pushes both --autopilot and --yolo", () => {
+  it("sciomc mode (removed from LOOPING_MODES) pushes neither --autopilot nor --yolo", () => {
+    // sciomc removed from LOOPING_MODES per v1.8 iter-3 plan Section L#2
+    // option C — state-module backing never existed.
     runMode({ mode: "sciomc", task: "test" });
     const args = getCapturedArgs(spawnMock);
-    expect(args).toContain("--autopilot");
-    expect(args).toContain("--yolo");
+    expect(args).not.toContain("--autopilot");
+    expect(args).not.toContain("--yolo");
   });
 
   it("team mode pushes both --autopilot and --yolo", () => {
