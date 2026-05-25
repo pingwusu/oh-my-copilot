@@ -15,6 +15,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:concurrent": "node -e \"process.env.OMCP_RUN_HEAVY_CONCURRENCY='1';require('child_process').spawnSync('npx',['vitest','run','--reporter=verbose'],{stdio:'inherit',shell:true,env:process.env}).status===0?process.exit(0):process.exit(1)\"",
     "test:rust": "cargo test",
     "lint": "biome lint src",
     "format": "biome format --write src",

@@ -35,3 +35,29 @@ jobs:
       # (copilot CLI is not installed in GitHub Actions Windows runners). These tests run
       # locally during development. See docs/adr/ADR-v2.0-public-release-deferred.md.
       - run: npx vitest run --exclude "src/__tests__/uninstall.test.ts" --exclude "src/__tests__/team-stop.test.ts" --exclude "src/__tests__/smoke-install.test.ts" --exclude "src/__tests__/copilot-config.hook-target.test.ts" --exclude "src/__tests__/team-stage-state.integration.test.ts"
+
+  test-concurrent:
+    # v2.2 EB-06 IPC mesh — heavy 8-process child_process.spawn concurrency
+    # tests for the outbox/inbox/heartbeat surface. Lives in a separate
+    # matrix lane so the default `test` job stays under 5 min. Activated
+    # via OMCP_RUN_HEAVY_CONCURRENCY=1; tests use it.skipIf(!env) so they
+    # skip silently elsewhere.
+    name: Test (concurrent, windows-latest, node ${{ matrix.node }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20"]
+    env:
+      OMCP_RUN_HEAVY_CONCURRENCY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node dist/scripts/sync-plugin-mirror.js
+      # Same CI exclude list as the default lane — only the env var differs.
+      - run: npx vitest run --reporter=verbose --exclude "src/__tests__/uninstall.test.ts" --exclude "src/__tests__/team-stop.test.ts" --exclude "src/__tests__/smoke-install.test.ts" --exclude "src/__tests__/copilot-config.hook-target.test.ts" --exclude "src/__tests__/team-stage-state.integration.test.ts"
