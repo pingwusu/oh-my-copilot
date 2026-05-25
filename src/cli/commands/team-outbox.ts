@@ -30,6 +30,7 @@ import {
   assertSafeSlug,
   UnsafeSlugError,
 } from "../../runtime/safe-slug.js";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 
 // ─── constants pinned by ADR-omcp-eb-02 ──────────────────────────────────────
 
@@ -400,4 +401,251 @@ export function readOutboxRaw(sessionId: string, cwd: string): string {
   const outboxPath = join(cwd, ".omcp", "state", "team", sessionId, "outbox.jsonl");
   if (!existsSync(outboxPath)) return "";
   return readFileSync(outboxPath, "utf8");
+}
+
+// ─── Story 4: outbox-read-cursor ──────────────────────────────────────────────
+
+/**
+ * Cursor file shape. Per ADR-EB-02 §4, the same shape covers outbox
+ * (single-file → fileIndex always 0) and inbox (rotates → fileIndex
+ * advances).
+ */
+export interface OutboxCursor {
+  fileIndex: number;
+  byteOffset: number;
+}
+
+export interface RunTeamOutboxReadOpts {
+  sessionId: string;
+  consumer: string;
+  /** Reset the cursor to {fileIndex:0, byteOffset:0} before reading. */
+  reset?: boolean;
+  cwd?: string;
+}
+
+export interface RunTeamOutboxReadResult {
+  exitCode: number;
+  /** Parsed entries (well-formed JSON lines) read this invocation. */
+  entries: OutboxLineEntry[];
+  /** Raw lines that failed to parse (partial writes / corrupt). */
+  parseErrors: string[];
+  /** New cursor after this read (persisted to disk on exit 0). */
+  cursor: OutboxCursor;
+  /** Cursor BEFORE this read (informational). */
+  previousCursor: OutboxCursor;
+  /** Path of the outbox file read from. */
+  outboxPath?: string;
+  /** Path of the cursor file. */
+  cursorPath?: string;
+}
+
+function cursorFilePath(pidDir: string, consumer: string): string {
+  return join(pidDir, `outbox-cursor-${consumer}.json`);
+}
+
+function readCursorFile(cursorPath: string): OutboxCursor {
+  if (!existsSync(cursorPath)) {
+    return { fileIndex: 0, byteOffset: 0 };
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(cursorPath, "utf8")) as Partial<OutboxCursor>;
+    const fileIndex =
+      typeof parsed.fileIndex === "number" && parsed.fileIndex >= 0
+        ? parsed.fileIndex
+        : 0;
+    const byteOffset =
+      typeof parsed.byteOffset === "number" && parsed.byteOffset >= 0
+        ? parsed.byteOffset
+        : 0;
+    return { fileIndex, byteOffset };
+  } catch {
+    // Corrupt cursor → fall back to fresh start (ADR-EB-02 §5 tolerance).
+    return { fileIndex: 0, byteOffset: 0 };
+  }
+}
+
+/**
+ * Read new lines from the outbox starting at the persisted cursor for
+ * `consumer`. Returns successfully-parsed entries + any unparseable lines
+ * separately (ADR-EB-02 §5: trailing partial line is non-fatal — cursor
+ * advances only past the last successfully-parsed line's \n so the next
+ * read picks up the partial line once a full line lands behind it).
+ *
+ * Exit codes:
+ *   0 — read completed; cursor advanced + persisted
+ *   2 — invalid sessionId or consumer
+ *   3 — outbox file absent (no work done; cursor unchanged)
+ */
+export function runTeamOutboxRead(
+  opts: RunTeamOutboxReadOpts,
+): RunTeamOutboxReadResult {
+  // Invariant 1.
+  try {
+    assertSafeSlug(opts.sessionId, "session-id");
+    assertSafeSlug(opts.consumer, "consumer");
+  } catch {
+    return {
+      exitCode: 2,
+      entries: [],
+      parseErrors: [],
+      cursor: { fileIndex: 0, byteOffset: 0 },
+      previousCursor: { fileIndex: 0, byteOffset: 0 },
+    };
+  }
+
+  const cwd = opts.cwd ?? process.cwd();
+  const pidDir = join(cwd, ".omcp", "state", "team", opts.sessionId);
+  const outboxPath = join(pidDir, "outbox.jsonl");
+  const cursorPath = cursorFilePath(pidDir, opts.consumer);
+
+  const previousCursor = opts.reset
+    ? { fileIndex: 0, byteOffset: 0 }
+    : readCursorFile(cursorPath);
+
+  if (!existsSync(outboxPath)) {
+    return {
+      exitCode: 3,
+      entries: [],
+      parseErrors: [],
+      cursor: previousCursor,
+      previousCursor,
+      outboxPath,
+      cursorPath,
+    };
+  }
+
+  const content = readFileSync(outboxPath, "utf8");
+  // Slice from previous byteOffset onward (UTF-8 byte-accurate).
+  const buffer = Buffer.from(content, "utf8");
+  const sliceFrom = Math.min(previousCursor.byteOffset, buffer.length);
+  const tail = buffer.slice(sliceFrom).toString("utf8");
+
+  // Split on \n. The LAST element after split may be empty (clean
+  // trailing newline) OR a partial line (mid-write). Partial line
+  // detection: lacks trailing \n in the original tail.
+  const hasTrailingNewline = tail.endsWith("\n");
+  const allParts = tail.split("\n");
+  // If tail ends with \n, the last split() element is "" → drop it.
+  // If tail does NOT end with \n, the last element is the partial line.
+  const completeLines = hasTrailingNewline
+    ? allParts.slice(0, -1) // drop trailing empty
+    : allParts.slice(0, -1); // drop the partial last line (advance cursor only past complete ones)
+  // partialLine bytes that we will NOT advance past on this read.
+  const partialLine = hasTrailingNewline ? "" : allParts[allParts.length - 1];
+  const partialBytes = Buffer.byteLength(partialLine, "utf8");
+
+  const entries: OutboxLineEntry[] = [];
+  const parseErrors: string[] = [];
+  for (const line of completeLines) {
+    if (line.length === 0) continue; // skip empty mid-stream lines (defensive)
+    const parsed = parseOutboxLine(line);
+    if (parsed.ok) {
+      entries.push(parsed.entry);
+    } else {
+      parseErrors.push(parsed.raw);
+    }
+  }
+
+  const advancedBytes = Buffer.byteLength(tail, "utf8") - partialBytes;
+  const newCursor: OutboxCursor = {
+    fileIndex: previousCursor.fileIndex, // outbox is single-file in EB-06
+    byteOffset: sliceFrom + advancedBytes,
+  };
+
+  // Atomic cursor persistence (Invariant 2).
+  mkdirSync(pidDir, { recursive: true });
+  // Use a separate atomicWriteFileSync import — already imported at top via runtime.
+  atomicWriteCursor(cursorPath, newCursor);
+
+  return {
+    exitCode: 0,
+    entries,
+    parseErrors,
+    cursor: newCursor,
+    previousCursor,
+    outboxPath,
+    cursorPath,
+  };
+}
+
+/** Atomically rewrite the cursor file (Invariant 2). Exported for tests. */
+export function atomicWriteCursor(cursorPath: string, cursor: OutboxCursor): void {
+  atomicWriteFileSync(cursorPath, JSON.stringify(cursor, null, 2));
+}
+
+// ─── Story 4: CLI wrapper ─────────────────────────────────────────────────────
+
+export interface RunTeamOutboxReadCliOpts {
+  reset?: boolean;
+  cwd?: string;
+  log?: (line: string) => void;
+  errLog?: (line: string) => void;
+  /** Optional: emit JSON for machine-readable consumers. */
+  json?: boolean;
+}
+
+/**
+ * `omcp team-outbox-read <session-id> <consumer> [--reset] [--json]` CLI
+ * wrapper. Returns exit code per runTeamOutboxRead.
+ */
+export function runTeamOutboxReadCli(
+  sessionId: string,
+  consumer: string,
+  opts: RunTeamOutboxReadCliOpts = {},
+): number {
+  const log = opts.log ?? ((l: string) => console.log(l));
+  const errLog = opts.errLog ?? ((l: string) => console.error(l));
+
+  try {
+    assertSafeSlug(sessionId, "session-id");
+    assertSafeSlug(consumer, "consumer");
+  } catch (err) {
+    if (err instanceof UnsafeSlugError) {
+      errLog(`omcp team-outbox-read: ${err.message}`);
+    } else {
+      errLog(`omcp team-outbox-read: invalid session-id or consumer`);
+    }
+    return 2;
+  }
+
+  const result = runTeamOutboxRead({
+    sessionId,
+    consumer,
+    reset: opts.reset,
+    cwd: opts.cwd,
+  });
+
+  if (result.exitCode === 3) {
+    errLog(
+      `omcp team-outbox-read: no outbox file for session '${sessionId}' (yet?)`,
+    );
+    return 3;
+  }
+
+  if (opts.json) {
+    log(
+      JSON.stringify(
+        {
+          previousCursor: result.previousCursor,
+          cursor: result.cursor,
+          entries: result.entries,
+          parseErrors: result.parseErrors,
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+
+  log(`omcp team-outbox-read: session=${sessionId} consumer=${consumer}`);
+  log(
+    `  cursor:        ${result.previousCursor.fileIndex}:${result.previousCursor.byteOffset} → ${result.cursor.fileIndex}:${result.cursor.byteOffset}`,
+  );
+  log(`  entries:       ${result.entries.length}`);
+  log(`  parse errors:  ${result.parseErrors.length}`);
+  for (const e of result.entries) {
+    log(`    ${e.ts} ${e.consumer} ${JSON.stringify(e.payload)}`);
+  }
+  return 0;
 }

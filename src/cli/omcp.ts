@@ -59,7 +59,10 @@ import {
 } from "./commands/team-verify.js";
 import { runTeamWait } from "./commands/team-wait.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
-import { runTeamOutboxWriteCli } from "./commands/team-outbox.js";
+import {
+  runTeamOutboxReadCli,
+  runTeamOutboxWriteCli,
+} from "./commands/team-outbox.js";
 import {
   ChainParseError,
   parseChainSpec,
@@ -400,6 +403,29 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           consumer,
           jsonPayload,
         );
+      },
+    );
+
+  program
+    .command("team-outbox-read <session-id> <consumer>")
+    .description(
+      "Read new outbox entries for <consumer> from the persisted byte-offset cursor (EB-06 Story 4). Cursor file at .omcp/state/team/<sid>/outbox-cursor-<consumer>.json with shape {fileIndex, byteOffset}. Per-consumer cursors are independent. Exit 0 ok / 2 invalid argv / 3 outbox absent.",
+    )
+    .option(
+      "--reset",
+      "reset cursor to {fileIndex:0, byteOffset:0} before reading (re-emits all entries)",
+    )
+    .option("--json", "emit JSON instead of human-readable summary")
+    .action(
+      (
+        sessionId: string,
+        consumer: string,
+        opts: { reset?: boolean; json?: boolean },
+      ) => {
+        process.exitCode = runTeamOutboxReadCli(sessionId, consumer, {
+          reset: opts.reset,
+          json: opts.json,
+        });
       },
     );
 
