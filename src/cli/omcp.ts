@@ -58,6 +58,11 @@ import {
   runTeamVerifyCli,
 } from "./commands/team-verify.js";
 import {
+  ChainParseError,
+  parseChainSpec,
+  type ChainStep,
+} from "./commands/chain.js";
+import {
   formatTeleportList,
   listTeleports,
   removeTeleport,
@@ -459,6 +464,10 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
       "--handoff",
       "after ralplan exits cleanly, read boulder state and hand off to ralph (opt-in)",
     )
+    .option(
+      "--chain <spec>",
+      "v2.1 N+2 Phase 3 chain orchestration spec — '--then verb [args...]' repeats. Example: \"--then team 4 fix-typo --then ralph-verify\". Empty spec or omitted = legacy ralplan behavior.",
+    )
     .action(
       (
         taskParts: string[],
@@ -468,8 +477,41 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           silent?: boolean;
           maxContinues?: number;
           handoff?: boolean;
+          chain?: string;
         },
       ) => {
+        // v2.1 N+2 Story 8: parse chain spec (if provided) and surface the
+        // resolved step list to the user. Story 9 wires the actual sequential
+        // runner; until then, --chain only validates + previews the spec so
+        // operators can dry-run the parse without committing to execution.
+        let chainSteps: ChainStep[] = [];
+        if (opts.chain !== undefined) {
+          try {
+            chainSteps = parseChainSpec(opts.chain);
+          } catch (err) {
+            if (err instanceof ChainParseError) {
+              console.error(`omcp ralplan --chain: ${err.message}`);
+            } else {
+              console.error(`omcp ralplan --chain: ${(err as Error).message}`);
+            }
+            process.exitCode = 2;
+            return;
+          }
+          if (chainSteps.length > 0) {
+            console.log(
+              `omcp ralplan: --chain parsed ${chainSteps.length} step(s) (preview):`,
+            );
+            for (let i = 0; i < chainSteps.length; i++) {
+              const s = chainSteps[i];
+              console.log(
+                `  ${i + 1}. ${s.verb}${s.args.length > 0 ? " " + s.args.map((a) => JSON.stringify(a)).join(" ") : ""}`,
+              );
+            }
+            console.log(
+              `omcp ralplan: chain runner (Story 9) not yet wired — falling back to legacy ralplan for the first step.`,
+            );
+          }
+        }
         const code = runMode({
           mode: "ralplan",
           task: taskParts.join(" "),
