@@ -1,7 +1,7 @@
 // `omcp doctor` — diagnose the omcp install and surrounding Copilot CLI state.
 // Runs a sequence of probes and prints a single-line verdict per check.
 
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import {
   closeSync,
   copyFileSync,
@@ -17,6 +17,7 @@ import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
 import {
   type CopilotConfig,
   type CopilotHooksMap,
+  COPILOT_VALID_EVENTS,
   hasOmcpHookWiring,
   hasOmcpStatusLine,
   readJsonOrDefault,
@@ -280,6 +281,93 @@ export function runDoctor(): CheckResult[] {
   } catch (err) {
     checks.push({
       name: "stale hook commands",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
+  // 12. Settings drift — detect entries in ~/.copilot/settings.json referencing
+  // missing scripts (broader than stale-settings: checks all hook commands, not
+  // just __omcp-owned). US-1.9-T2-DOCTOR-check-settings-drift (Invariant 8).
+  try {
+    const probe = probeSettingsDrift(paths.copilotSettings);
+    checks.push({
+      name: "settings drift",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "settings drift",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
+  // 13. Hook registration — validate each registered hook event in settings.json
+  // is in COPILOT_VALID_EVENTS, with special enforcement that `subagentStart`
+  // is camelCase (Invariant 5). US-1.9-T2-DOCTOR-check-hook-registration.
+  try {
+    const probe = probeHookRegistration(paths.copilotSettings);
+    checks.push({
+      name: "hook registration",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "hook registration",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
+  // 14. Agent catalog — verify all agents/*.md files are registered in the
+  // agent catalog. US-1.9-T2-DOCTOR-check-agent-catalog (Invariant 8).
+  try {
+    const probe = probeAgentCatalog(paths.omcpPluginDir);
+    checks.push({
+      name: "agent catalog",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "agent catalog",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
+  // 15. Plugin install mirror — run sync-plugin-mirror --check to detect drift.
+  // US-1.9-T2-DOCTOR-check-plugin-install (Invariant 8).
+  try {
+    const probe = probePluginInstall();
+    checks.push({
+      name: "plugin mirror",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "plugin mirror",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
+  // 16. Copilot auth — spawn `copilot -p "echo test"` and assert exit 0.
+  // US-1.9-T2-DOCTOR-check-copilot-auth (Invariant 8).
+  try {
+    const probe = probeCopilotAuth();
+    checks.push({
+      name: "copilot auth",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "copilot auth",
       level: "warn",
       detail: `unable to probe: ${(err as Error).message}`,
     });
@@ -605,8 +693,341 @@ export function formatChecks(checks: CheckResult[]): string {
     .join("\n");
 }
 
+export function formatChecksJson(checks: CheckResult[]): string {
+  return JSON.stringify({ checks }, null, 2);
+}
+
 export function exitCodeFor(checks: CheckResult[]): number {
   if (checks.some((c) => c.level === "fail")) return 2;
   if (checks.some((c) => c.level === "warn")) return 1;
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// US-1.9-T2-DOCTOR-check-settings-drift (Invariant 8: CLI registration)
+// ---------------------------------------------------------------------------
+
+/**
+ * Probe ~/.copilot/settings.json for entries referencing missing scripts.
+ * Unlike probeStaleSettings (scoped to __omcp:true entries), this probe
+ * scans ALL hook command entries for missing `node "<path>"` script references.
+ * Returns ok if settings.json absent or all referenced scripts resolve.
+ */
+export function probeSettingsDrift(
+  settingsPath: string,
+): { level: CheckLevel; detail: string } {
+  if (!existsSync(settingsPath)) {
+    return { level: "ok", detail: "no settings.json yet" };
+  }
+  return analyzeSettingsDriftFromJson(
+    readFileSync(settingsPath, "utf8"),
+    settingsPath,
+  );
+}
+
+/**
+ * Pure analyzer for settings drift. Scans every hook command for
+ * `node "<path>"` patterns and checks whether the path exists.
+ * Exported for testing.
+ */
+export function analyzeSettingsDriftFromJson(
+  jsonContent: string,
+  settingsPath: string,
+): { level: CheckLevel; detail: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonContent);
+  } catch {
+    return {
+      level: "warn",
+      detail: `settings.json at ${settingsPath} is not valid JSON; run \`omcp setup\` to rewrite.`,
+    };
+  }
+  const root = parsed as { hooks?: Record<string, unknown> };
+  if (!root.hooks || typeof root.hooks !== "object") {
+    return { level: "ok", detail: "no hook entries in settings.json" };
+  }
+  const missing: { event: string; path: string }[] = [];
+  let totalEntries = 0;
+  for (const [event, matchers] of Object.entries(root.hooks)) {
+    if (!Array.isArray(matchers)) continue;
+    for (const matcher of matchers) {
+      const hooks = (matcher as { hooks?: unknown[] }).hooks;
+      if (!Array.isArray(hooks)) continue;
+      for (const h of hooks) {
+        const entry = h as { command?: string };
+        if (typeof entry.command !== "string") continue;
+        totalEntries++;
+        const nodeMatch = entry.command.match(/node\s+"([^"]+)"/);
+        const candidate = nodeMatch?.[1];
+        if (candidate && !existsSync(candidate)) {
+          missing.push({ event, path: candidate });
+        }
+      }
+    }
+  }
+  if (totalEntries === 0) {
+    return { level: "ok", detail: "no hook command entries in settings.json" };
+  }
+  if (missing.length === 0) {
+    return {
+      level: "ok",
+      detail: `${totalEntries} hook command entries — all referenced scripts exist`,
+    };
+  }
+  const sample = missing
+    .slice(0, 3)
+    .map((s) => `${s.event}→${s.path.split(/[\\/]/).pop()}`)
+    .join(", ");
+  return {
+    level: "warn",
+    detail:
+      `${missing.length}/${totalEntries} hook entries reference missing scripts ` +
+      `(${sample}${missing.length > 3 ? ", ..." : ""}). Run \`omcp setup\` to refresh.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// US-1.9-T2-DOCTOR-check-hook-registration (Invariant 5: subagentStart camelCase)
+// ---------------------------------------------------------------------------
+
+/**
+ * Probe ~/.copilot/settings.json hook event names against COPILOT_VALID_EVENTS.
+ * Flags unknown event names as fail and warns if `SubagentStart` (PascalCase)
+ * is used instead of the required camelCase `subagentStart` (Invariant 5).
+ */
+export function probeHookRegistration(
+  settingsPath: string,
+): { level: CheckLevel; detail: string } {
+  if (!existsSync(settingsPath)) {
+    return { level: "ok", detail: "no settings.json yet" };
+  }
+  return analyzeHookRegistrationFromJson(
+    readFileSync(settingsPath, "utf8"),
+    settingsPath,
+  );
+}
+
+/**
+ * Pure analyzer for hook event registration. Exported for testing.
+ */
+export function analyzeHookRegistrationFromJson(
+  jsonContent: string,
+  settingsPath: string,
+): { level: CheckLevel; detail: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonContent);
+  } catch {
+    return {
+      level: "warn",
+      detail: `settings.json at ${settingsPath} is not valid JSON; run \`omcp setup\` to rewrite.`,
+    };
+  }
+  const root = parsed as { hooks?: Record<string, unknown> };
+  if (!root.hooks || typeof root.hooks !== "object") {
+    return { level: "ok", detail: "no hook events registered in settings.json" };
+  }
+  const validSet = new Set<string>(COPILOT_VALID_EVENTS);
+  const unknown: string[] = [];
+  const badCase: string[] = []; // e.g. SubagentStart instead of subagentStart
+  for (const event of Object.keys(root.hooks)) {
+    if (!validSet.has(event)) {
+      // Check specifically for SubagentStart — camelCase violation (Invariant 5)
+      if (event.toLowerCase() === "subagentstart" && event !== "subagentStart") {
+        badCase.push(event);
+      } else {
+        unknown.push(event);
+      }
+    }
+  }
+  if (unknown.length === 0 && badCase.length === 0) {
+    return {
+      level: "ok",
+      detail: `${Object.keys(root.hooks).length} hook event(s) all valid`,
+    };
+  }
+  const parts: string[] = [];
+  if (badCase.length > 0) {
+    parts.push(
+      `${badCase.join(", ")} must be camelCase \`subagentStart\` (Invariant 5)`,
+    );
+  }
+  if (unknown.length > 0) {
+    parts.push(`unknown event(s): ${unknown.join(", ")}`);
+  }
+  return {
+    level: "fail",
+    detail: parts.join("; ") + " — run `omcp setup` to fix.",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// US-1.9-T2-DOCTOR-check-agent-catalog (Invariant 8: CLI registration)
+// ---------------------------------------------------------------------------
+
+/** Expected number of agents per the omcp manifest. */
+const EXPECTED_AGENT_COUNT = 19;
+
+/**
+ * Probe the agents directory inside the omcp plugin cache and verify all
+ * 19 expected agents are present. Returns warn (not fail) when the plugin
+ * cache is absent (mirrors the "agent catalog" tier-1 check above).
+ */
+export function probeAgentCatalog(
+  omcpPluginDir: string,
+): { level: CheckLevel; detail: string } {
+  const agentsDir = join(omcpPluginDir, "agents");
+  if (!existsSync(agentsDir)) {
+    return {
+      level: "warn",
+      detail: `agents/ directory not found at ${agentsDir} — run \`omcp setup\``,
+    };
+  }
+  return analyzeAgentCatalogFromDir(agentsDir);
+}
+
+/**
+ * Pure analyzer: count *.md files in the agents directory and compare
+ * against EXPECTED_AGENT_COUNT. Exported for testing.
+ */
+export function analyzeAgentCatalogFromDir(
+  agentsDir: string,
+): { level: CheckLevel; detail: string } {
+  let files: string[];
+  try {
+    files = readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+  } catch (err) {
+    return {
+      level: "warn",
+      detail: `unable to read agents/: ${(err as Error).message}`,
+    };
+  }
+  const count = files.length;
+  if (count === EXPECTED_AGENT_COUNT) {
+    return {
+      level: "ok",
+      detail: `${count}/${EXPECTED_AGENT_COUNT} agents present in catalog`,
+    };
+  }
+  if (count > EXPECTED_AGENT_COUNT) {
+    return {
+      level: "ok",
+      detail: `${count} agents present (${count - EXPECTED_AGENT_COUNT} extra beyond expected ${EXPECTED_AGENT_COUNT})`,
+    };
+  }
+  const missing = EXPECTED_AGENT_COUNT - count;
+  return {
+    level: "warn",
+    detail:
+      `${count}/${EXPECTED_AGENT_COUNT} agents present — ${missing} missing. ` +
+      `Run \`omcp setup\` to refresh the plugin cache.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// US-1.9-T2-DOCTOR-check-plugin-install (Invariant 8: CLI registration)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `node src/scripts/sync-plugin-mirror.ts --check` (via the compiled
+ * dist equivalent) and report mirror drift. If the compiled script is not
+ * found, falls back gracefully to a warn.
+ *
+ * Spawns synchronously so doctor stays single-threaded. The --check flag
+ * causes sync-plugin-mirror to exit 1 on any drift.
+ */
+export function probePluginInstall(
+  syncScriptPath?: string,
+): { level: CheckLevel; detail: string } {
+  // Resolve the compiled script path: dist/scripts/sync-plugin-mirror.js
+  // This file is at dist/cli/commands/doctor.js at runtime; climb to dist/
+  // then to package root, then dist/scripts/
+  let scriptPath = syncScriptPath;
+  if (!scriptPath) {
+    // __dirname-equivalent for ESM: derive from import.meta logic is not
+    // available here so we use a relative approach from process.argv[1]
+    // (dist/cli/omcp.js) — climb two levels to package root.
+    try {
+      // Try to find via process.argv[1] which is omcp.js at dist/cli/omcp.js
+      const argv1 = process.argv[1];
+      if (argv1) {
+        const pkgRoot = join(argv1, "..", "..", "..");
+        scriptPath = join(pkgRoot, "dist", "scripts", "sync-plugin-mirror.js");
+      }
+    } catch {
+      // ignore; leave undefined → warn below
+    }
+  }
+  if (!scriptPath || !existsSync(scriptPath)) {
+    return {
+      level: "warn",
+      detail: "sync-plugin-mirror script not found in dist/ — run `npm run build` first",
+    };
+  }
+  const result = spawnSync(
+    process.execPath,
+    [scriptPath, "--check"],
+    { encoding: "utf8", timeout: 15000 },
+  );
+  if (result.status === 0) {
+    return { level: "ok", detail: "plugin mirror in sync with source" };
+  }
+  const stderr = (result.stderr ?? "").trim();
+  const driftLine = stderr.split("\n").find((l) => l.includes("drift entries"));
+  return {
+    level: "warn",
+    detail:
+      `plugin mirror has drift${driftLine ? ` (${driftLine.trim()})` : ""} — ` +
+      `run \`omcp setup\` or \`node src/scripts/sync-plugin-mirror.ts\` to refresh.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// US-1.9-T2-DOCTOR-check-copilot-auth (Invariant 8: CLI registration)
+// ---------------------------------------------------------------------------
+
+export interface CopilotAuthSpawnResult {
+  status: number | null;
+  stderr?: string;
+}
+
+/**
+ * Probe whether the Copilot CLI is authenticated by spawning
+ * `copilot -p "echo test"` with a short timeout. Exit 0 → ok; non-zero → warn.
+ *
+ * The `spawnFn` parameter is injectable for tests so CI does not need a real
+ * Copilot auth session.
+ */
+export function probeCopilotAuth(
+  spawnFn?: (cmd: string, args: string[]) => CopilotAuthSpawnResult,
+): { level: CheckLevel; detail: string } {
+  const doSpawn = spawnFn ?? ((cmd: string, args: string[]) => {
+    const r = spawnSync(cmd, args, {
+      encoding: "utf8",
+      timeout: 10000,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    return { status: r.status, stderr: (r.stderr as string | null) ?? "" };
+  });
+  try {
+    const result = doSpawn("copilot", ["-p", "echo test"]);
+    if (result.status === 0) {
+      return { level: "ok", detail: "copilot CLI authenticated (exit 0)" };
+    }
+    const hint = (result.stderr ?? "")
+      .split("\n")
+      .find((l) => l.toLowerCase().includes("auth") || l.toLowerCase().includes("login"));
+    return {
+      level: "warn",
+      detail:
+        `copilot exited ${result.status ?? "null"}${hint ? ` — ${hint.trim()}` : ""} — ` +
+        `run \`copilot auth login\` to authenticate.`,
+    };
+  } catch (err) {
+    return {
+      level: "warn",
+      detail: `unable to spawn copilot: ${(err as Error).message}`,
+    };
+  }
 }

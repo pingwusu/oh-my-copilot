@@ -12,6 +12,7 @@ import { formatCleanupReport, runCleanup } from "./commands/cleanup.js";
 import {
   exitCodeFor,
   formatChecks,
+  formatChecksJson,
   runDoctor,
 } from "./commands/doctor.js";
 import { doctorTeamRoutingCommand } from "./commands/doctor-team-routing.js";
@@ -136,9 +137,14 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   program
     .command("doctor")
     .description("Diagnose omcp install, MCP, and Copilot CLI state")
-    .action(() => {
+    .option("--json", "emit JSON instead of human-readable output")
+    .action((opts: { json?: boolean }) => {
       const checks = runDoctor();
-      console.log(formatChecks(checks));
+      if (opts.json) {
+        process.stdout.write(`${formatChecksJson(checks)}\n`);
+      } else {
+        console.log(formatChecks(checks));
+      }
       process.exitCode = exitCodeFor(checks);
     });
 

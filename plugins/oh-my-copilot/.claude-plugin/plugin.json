@@ -1,6 +1,6 @@
 {
   "name": "oh-my-copilot",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Multi-agent orchestration for GitHub Copilot CLI (Claude + GPT dual-model)",
   "author": {
     "name": "oh-my-copilot contributors"
