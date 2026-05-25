@@ -1,6 +1,6 @@
 {
   "name": "oh-my-copilot",
-  "version": "2.0.0-rc.1",
+  "version": "2.1.0",
   "description": "Multi-agent orchestration layer for GitHub Copilot CLI — Claude+GPT dual-model, inspired by oh-my-claudecode and oh-my-codex",
   "type": "module",
   "main": "dist/index.js",

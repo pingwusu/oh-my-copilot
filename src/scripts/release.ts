@@ -3,10 +3,24 @@
 //   npm run release -- 0.1.0           # explicit semver
 //   npm run release -- patch|minor|major
 //   npm run release -- --dry-run 0.1.0
+//   npm run release -- 2.1.0 --bump-only             # manifests only; no commit/tag
+//   npm run release -- 2.1.0 --allow-deterministic-only
+//     # skip the live-smoke tag gate (use ONLY for hotfix releases where
+//     # operator has explicitly accepted that no live-Copilot smoke ran)
+//
+// v2.1 Story 20: tag-cut is gated on `checkLiveSmoke()` from
+// src/scripts/check-live-smoke.ts. When ZERO live-mode smoke artifacts
+// are present under docs/smoke/omcp-team-parity/, the release exits 1
+// with the canonical message: "v2.1.0 LOCAL tag blocked: ≥1 live-smoke
+// required — capture P1, P3, or P4 with real Copilot CLI auth".
+// Operators bypass the gate via --allow-deterministic-only (documented
+// path for hotfixes that don't require fresh smoke).
 
 import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { checkLiveSmoke, formatLiveSmokeReport } from "./check-live-smoke.js";
+import { sync as syncPluginMirror } from "./sync-plugin-mirror.js";
 
 const ROOT = join(import.meta.dirname ?? __dirname, "..", "..");
 
@@ -50,15 +64,39 @@ interface ReleaseResult {
   touched: string[];
   tag: string;
   dryRun: boolean;
+  /** True iff `--bump-only` was passed (no commit, no tag). */
+  bumpOnly: boolean;
+  /**
+   * True iff the live-smoke gate was bypassed via
+   * `--allow-deterministic-only`. Recorded for downstream audit.
+   */
+  allowedDeterministicOnly: boolean;
+}
+
+/** Sentinel thrown when the live-smoke gate refuses to cut the tag. */
+export class LiveSmokeTagBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LiveSmokeTagBlockedError";
+  }
 }
 
 export function release(argv: string[]): ReleaseResult {
   const dryRun = argv.includes("--dry-run");
-  const args = argv.filter((a) => a !== "--dry-run");
+  const bumpOnly = argv.includes("--bump-only");
+  const allowedDeterministicOnly = argv.includes(
+    "--allow-deterministic-only",
+  );
+  const args = argv.filter(
+    (a) =>
+      a !== "--dry-run" &&
+      a !== "--bump-only" &&
+      a !== "--allow-deterministic-only",
+  );
   const target = args[0];
   if (!target) {
     throw new Error(
-      "usage: release <semver | patch | minor | major> [--dry-run]",
+      "usage: release <semver | patch | minor | major> [--dry-run] [--bump-only] [--allow-deterministic-only]",
     );
   }
 
@@ -94,20 +132,56 @@ export function release(argv: string[]): ReleaseResult {
   if (!dryRun) writeJsonPretty(mpPath, mp);
   touched.push(".agents/plugins/marketplace.json");
 
-  // CHANGELOG.md
+  // CHANGELOG.md — replace the [Unreleased] header in-place only when the
+  // body doesn't already carry a pre-existing [<to>] section (idempotent
+  // when v2.1 Story 19 has already written the CHANGELOG entry).
   const clPath = join(ROOT, "CHANGELOG.md");
   const cl = readFileSync(clPath, "utf8");
   const today = new Date().toISOString().slice(0, 10);
-  const nextCl = cl.replace(
-    /^## \[Unreleased\]/m,
-    `## [Unreleased]\n\n## [${fmtSemver(to)}] — ${today}`,
-  );
-  if (!dryRun) writeFileSync(clPath, nextCl);
-  touched.push("CHANGELOG.md");
+  const alreadyEntered = new RegExp(
+    `^## \\[${fmtSemver(to).replace(/\./g, "\\.")}\\]`,
+    "m",
+  ).test(cl);
+  if (!alreadyEntered) {
+    const nextCl = cl.replace(
+      /^## \[Unreleased\]/m,
+      `## [Unreleased]\n\n## [${fmtSemver(to)}] — ${today}`,
+    );
+    if (!dryRun) writeFileSync(clPath, nextCl);
+    touched.push("CHANGELOG.md");
+  }
+
+  // 4th manifest — plugin mirror's .claude-plugin/plugin.json. The mirror
+  // sync script copies it from the source .claude-plugin/ directory which
+  // we just bumped, so syncing here keeps the cli-wiring-invariants
+  // 4-manifest version check green. Invariant 3 (4-manifest sync).
+  if (!dryRun) {
+    syncPluginMirror();
+  }
+  touched.push("plugins/oh-my-copilot/.claude-plugin/plugin.json");
 
   // git commit + tag
   const tag = `v${fmtSemver(to)}`;
-  if (!dryRun) {
+
+  // v2.1 Story 20 tag-gate: refuse to tag if zero live-smoke artifacts
+  // are present (deterministic attestations alone do not satisfy the
+  // iter-2 plan §RELEASE-cut S4 contract). The --bump-only and dry-run
+  // paths short-circuit before this check so they can be exercised in
+  // any state.
+  if (!dryRun && !bumpOnly) {
+    const smoke = checkLiveSmoke({ cwd: ROOT });
+    // Surface the report to the operator before either proceeding to
+    // commit/tag or aborting.
+    // biome-ignore lint/suspicious/noConsole: release script
+    console.log(formatLiveSmokeReport(smoke));
+    if (!smoke.tagGateSatisfied && !allowedDeterministicOnly) {
+      throw new LiveSmokeTagBlockedError(
+        `${tag} LOCAL tag blocked: ≥1 live-smoke required — capture P1, P3, or P4 with real Copilot CLI auth (or re-run with --allow-deterministic-only to bypass for a hotfix)`,
+      );
+    }
+  }
+
+  if (!dryRun && !bumpOnly) {
     execSync(`git add ${touched.map((f) => JSON.stringify(f)).join(" ")}`, {
       cwd: ROOT,
       stdio: "inherit",
@@ -128,6 +202,8 @@ export function release(argv: string[]): ReleaseResult {
     touched,
     tag,
     dryRun,
+    bumpOnly,
+    allowedDeterministicOnly,
   };
 }
 
