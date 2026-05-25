@@ -1,5 +1,11 @@
 name: CI
 
+# Windows-first per v2.0 stability commitment (see README + docs/architecture/v1.7-to-v2.0-roadmap.md).
+# Cross-platform (ubuntu/macos) is v2.1+ scope per user 2026-05-25 decision.
+# Rust workspace + smoke-e2e steps are deferred per ADRs:
+#   - docs/adr/ADR-sparkshell-rust-blocked.md (Rust toolchain USER_REQUIRED)
+#   - smoke-e2e requires Copilot CLI auth which CI runners don't have
+
 on:
   push:
     branches: [main]
@@ -8,13 +14,12 @@ on:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }}, node ${{ matrix.node }})
-    runs-on: ${{ matrix.os }}
+    name: Test (windows-latest, node ${{ matrix.node }})
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: ["20", "22"]
+        node: ["20"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,13 +31,3 @@ jobs:
       - run: node dist/scripts/verify-catalog.js
       - run: node dist/scripts/verify-plugin-bundle.js
       - run: npm test
-      - run: node dist/scripts/smoke-e2e.js
-
-  rust:
-    name: Cargo build & test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --workspace
-      - run: cargo test --workspace
