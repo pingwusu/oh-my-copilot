@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  clearWorkerVerifyFailSignals,
   resolveMaxLoops,
   runTeamVerify,
   runTeamVerifyCli,
@@ -402,6 +403,91 @@ describe("resolveMaxLoops — precedence chain", () => {
     // In this test no env is set, so flag=7 should win.
     delete process.env.OMCP_TEAM_MAX_FIX_LOOPS;
     expect(report.max_fix_loops).toBe(7);
+  });
+});
+
+// ─── stale signal cleanup ─────────────────────────────────────────────────────
+
+describe("clearWorkerVerifyFailSignals", () => {
+  it("deletes only worker-K-verify-fail.json files (preserves pidfiles, shards, reports)", () => {
+    const sessionId = "sess-clear-scope";
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(path.join(pidDir, "worker-1.pid"), "111", "utf8");
+    fs.writeFileSync(path.join(pidDir, "worker-1-shard.json"), "{}", "utf8");
+    fs.writeFileSync(path.join(pidDir, "worker-1-verify-fail.json"), "{}", "utf8");
+    fs.writeFileSync(path.join(pidDir, "worker-2-verify-fail.json"), "{}", "utf8");
+    fs.writeFileSync(path.join(pidDir, "verify-report-1.json"), "{}", "utf8");
+    fs.writeFileSync(path.join(pidDir, "conflicts.json"), "{}", "utf8");
+
+    const cleared = clearWorkerVerifyFailSignals(pidDir);
+    expect(cleared).toBe(2);
+    expect(fs.existsSync(path.join(pidDir, "worker-1.pid"))).toBe(true);
+    expect(fs.existsSync(path.join(pidDir, "worker-1-shard.json"))).toBe(true);
+    expect(fs.existsSync(path.join(pidDir, "verify-report-1.json"))).toBe(true);
+    expect(fs.existsSync(path.join(pidDir, "conflicts.json"))).toBe(true);
+    expect(fs.existsSync(path.join(pidDir, "worker-1-verify-fail.json"))).toBe(false);
+    expect(fs.existsSync(path.join(pidDir, "worker-2-verify-fail.json"))).toBe(false);
+  });
+
+  it("returns 0 when pidDir does not exist", () => {
+    expect(clearWorkerVerifyFailSignals(path.join(tmp, "nope"))).toBe(0);
+  });
+});
+
+describe("runTeamVerify — stale signal cleanup invariant", () => {
+  it("clears prior-fail signals when subsequent run passes (no stale signals leak)", () => {
+    const sessionId = "sess-stale-clear";
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 16001);
+    writePidFile(pidDir, 2, 16002);
+
+    // Iteration 1: vitest fails → 2 signal files written.
+    const tableFail: Record<string, VerifySpawnResult> = {
+      ...ALL_PASS,
+      "npx vitest": { exitCode: 1, output: "fail" },
+    };
+    const r1 = runTeamVerify({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeSpawnFn(tableFail),
+    });
+    expect(r1.workerSignals).toBe(2);
+    expect(fs.existsSync(path.join(pidDir, "worker-1-verify-fail.json"))).toBe(true);
+    expect(fs.existsSync(path.join(pidDir, "worker-2-verify-fail.json"))).toBe(true);
+
+    // Iteration 2: all pass → stale signals from iteration 1 must be cleared.
+    const r2 = runTeamVerify({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeSpawnFn(ALL_PASS),
+    });
+    expect(r2.ok).toBe(true);
+    expect(r2.workerSignals).toBe(0);
+    expect(fs.existsSync(path.join(pidDir, "worker-1-verify-fail.json"))).toBe(false);
+    expect(fs.existsSync(path.join(pidDir, "worker-2-verify-fail.json"))).toBe(false);
+    // verify-report-2.json must be present + ok=true.
+    const report = readReport(path.join(pidDir, "verify-report-2.json"));
+    expect(report.ok).toBe(true);
+  });
+
+  it("rewrites signal files with current iteration metadata when re-running a failure", () => {
+    const sessionId = "sess-rewrite-signal";
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 17001);
+
+    const tableFail: Record<string, VerifySpawnResult> = {
+      ...ALL_PASS,
+      "npx vitest": { exitCode: 1, output: "fail" },
+    };
+    runTeamVerify({ sessionId, cwd: tmp, spawnFn: makeSpawnFn(tableFail) });
+    runTeamVerify({ sessionId, cwd: tmp, spawnFn: makeSpawnFn(tableFail) });
+
+    const sig = JSON.parse(
+      fs.readFileSync(path.join(pidDir, "worker-1-verify-fail.json"), "utf8"),
+    ) as { iteration: number; reportPath: string };
+    expect(sig.iteration).toBe(2);
+    expect(sig.reportPath).toBe("verify-report-2.json");
   });
 });
 

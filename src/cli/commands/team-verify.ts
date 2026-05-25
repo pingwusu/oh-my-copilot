@@ -15,7 +15,7 @@
 //   I8 — registered as `omcp team-verify` in src/cli/omcp.ts.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
@@ -113,6 +113,32 @@ function listWorkerIndices(pidDir: string): number[] {
 }
 
 /**
+ * Delete every `worker-*-verify-fail.json` from the pidDir. Called at the
+ * start of `runTeamVerify` so that the signal file set always reflects the
+ * CURRENT verify pass — stale signals from a prior failed iteration never
+ * leak forward into a subsequent passing iteration where Story 3's
+ * `runTeamCollect` would mis-interpret them as a fresh fix-needed condition.
+ *
+ * Exported for direct unit-testing.
+ */
+export function clearWorkerVerifyFailSignals(pidDir: string): number {
+  if (!existsSync(pidDir)) return 0;
+  let cleared = 0;
+  for (const f of readdirSync(pidDir)) {
+    if (/^worker-\d+-verify-fail\.json$/.test(f)) {
+      try {
+        rmSync(join(pidDir, f), { force: true });
+        cleared++;
+      } catch {
+        // best-effort cleanup; a stale signal still gets overwritten on
+        // the next fail and is harmless if the run passes here.
+      }
+    }
+  }
+  return cleared;
+}
+
+/**
  * Resolve the max-fix-loops value. Precedence:
  *   1. OMCP_TEAM_MAX_FIX_LOOPS env var (positive integer)
  *   2. `arg` parameter (positive integer)
@@ -159,6 +185,12 @@ export function runTeamVerify(
   const cwd = opts.cwd ?? process.cwd();
   const pidDir = join(cwd, ".omcp", "state", "team", opts.sessionId);
   mkdirSync(pidDir, { recursive: true });
+
+  // Clear stale worker-K-verify-fail.json signals BEFORE running tools so the
+  // signal file set always reflects the current pass. Without this, a prior
+  // failed iteration's signals would persist through a passing re-verify and
+  // Story 3's `runTeamCollect` would mis-route the team back into `fixing`.
+  clearWorkerVerifyFailSignals(pidDir);
 
   const doSpawn: VerifySpawnFn =
     opts.spawnFn ??
