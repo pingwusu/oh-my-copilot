@@ -57,6 +57,7 @@ import {
   runTeamFixCli,
   runTeamVerifyCli,
 } from "./commands/team-verify.js";
+import { runTeamWait } from "./commands/team-wait.js";
 import {
   ChainParseError,
   parseChainSpec,
@@ -356,6 +357,24 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     )
     .action((sessionId: string, opts: { maxLoops?: number }) => {
       process.exitCode = runTeamFixCli(sessionId, { maxLoops: opts.maxLoops });
+    });
+
+  program
+    .command("team-wait <session-id>")
+    .description(
+      "Block until a team session reaches a terminal phase. Exit codes: 0 completed, 1 failed, 2 timeout, 3 session-not-found. Polls TeamState every 2s; no IPC dependency.",
+    )
+    .option(
+      "--timeout <secs>",
+      "wall-clock timeout in seconds (default 1800; env OMCP_TEAM_WAIT_TIMEOUT_S overrides)",
+      (v) => Number(v),
+    )
+    .action((sessionId: string, opts: { timeout?: number }) => {
+      const timeoutMs =
+        opts.timeout !== undefined && Number.isFinite(opts.timeout)
+          ? Math.floor(opts.timeout * 1000)
+          : undefined;
+      process.exitCode = runTeamWait({ sessionId, timeoutMs });
     });
 
   program
