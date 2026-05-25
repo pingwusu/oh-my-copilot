@@ -373,6 +373,27 @@ export function runDoctor(): CheckResult[] {
     });
   }
 
+  // 17. Verify-spawn shape — spawn `copilot -p "echo verify-spawn-check"` and
+  // assert exit 0 + a recognizable model-id token (`gpt-` or `claude-`) appears
+  // in stdout. Gates `omcp team-verify` readiness — if Copilot CLI renames
+  // `--allow-all-tools` or changes `-p` stdin semantics, the verify-worker
+  // spawn would silently no-op. US-omcp-parity-P1-DOCTOR-verify-spawn-shape
+  // (Invariants 8 + 4).
+  try {
+    const probe = probeVerifySpawnShape();
+    checks.push({
+      name: "verify-spawn shape",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "verify-spawn shape",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
   return checks;
 }
 
@@ -1023,6 +1044,110 @@ export function probeCopilotAuth(
       detail:
         `copilot exited ${result.status ?? "null"}${hint ? ` — ${hint.trim()}` : ""} — ` +
         `run \`copilot auth login\` to authenticate.`,
+    };
+  } catch (err) {
+    return {
+      level: "warn",
+      detail: `unable to spawn copilot: ${(err as Error).message}`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// US-omcp-parity-P1-DOCTOR-verify-spawn-shape (Invariants 8 + 4)
+// ---------------------------------------------------------------------------
+
+export interface CopilotVerifySpawnResult {
+  status: number | null;
+  stdout?: string;
+  stderr?: string;
+  /** True when spawnSync killed the child due to the timeout option firing. */
+  timedOut?: boolean;
+}
+
+/**
+ * Timeout for the verify-spawn probe in ms. Per US-P1-DOCTOR-verify-spawn-shape
+ * acceptance criteria — 30s. Independent of `probeCopilotAuth`'s 10s since this
+ * probe also has to capture stdout (model-id token) which Copilot prints after
+ * the model has loaded.
+ */
+const VERIFY_SPAWN_TIMEOUT_MS = 30000;
+
+/** Substrings that identify a recognizable Copilot model-id banner. */
+const MODEL_ID_TOKENS = ["gpt-", "claude-"] as const;
+
+/**
+ * Probe whether the Copilot CLI's `-p` mode produces a recognizable model-id
+ * token. Spawns `copilot -p "echo verify-spawn-check"`; returns ok when exit 0
+ * AND stdout contains `gpt-` or `claude-`. Anything else → warn with the
+ * captured stderr hint surfaced.
+ *
+ * The `spawnFn` parameter is injectable for tests so CI can run this check
+ * without a real Copilot auth session. Gates `omcp team-verify` readiness:
+ * if `--allow-all-tools` is renamed or `-p` stdin semantics drift between
+ * Copilot CLI versions, the verify-worker spawn would silently no-op without
+ * this guard. (Pre-mortem scenario 1 in iter-2 plan.)
+ */
+export function probeVerifySpawnShape(
+  spawnFn?: (cmd: string, args: string[]) => CopilotVerifySpawnResult,
+): { level: CheckLevel; detail: string } {
+  const doSpawn = spawnFn ?? ((cmd: string, args: string[]) => {
+    const r = spawnSync(cmd, args, {
+      encoding: "utf8",
+      timeout: VERIFY_SPAWN_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    // spawnSync sets `signal` to "SIGTERM" when killed by timeout on POSIX,
+    // or returns status=null with signal=null on Windows. Detect either shape.
+    const timedOut =
+      r.signal !== null || (r.status === null && r.error?.message?.includes("ETIMEDOUT"));
+    return {
+      status: r.status,
+      stdout: (r.stdout as string | null) ?? "",
+      stderr: (r.stderr as string | null) ?? "",
+      timedOut: Boolean(timedOut),
+    };
+  });
+
+  try {
+    const result = doSpawn("copilot", ["-p", "echo verify-spawn-check"]);
+
+    if (result.timedOut) {
+      return {
+        level: "warn",
+        detail:
+          `copilot -p timed out after ${VERIFY_SPAWN_TIMEOUT_MS}ms — ` +
+          `verify-worker spawns may hang. Re-run \`omcp doctor\` after \`copilot auth login\`.`,
+      };
+    }
+
+    if (result.status !== 0) {
+      const hint = (result.stderr ?? "")
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+      return {
+        level: "warn",
+        detail:
+          `copilot -p exited ${result.status ?? "null"}${hint ? ` — ${hint}` : ""} — ` +
+          `verify-worker spawns will fail. Run \`copilot auth login\`.`,
+      };
+    }
+
+    const stdout = result.stdout ?? "";
+    const matched = MODEL_ID_TOKENS.find((tok) => stdout.includes(tok));
+    if (!matched) {
+      return {
+        level: "warn",
+        detail:
+          `copilot -p exit 0 but no model-id token (gpt-/claude-) found in stdout — ` +
+          `Copilot CLI banner shape may have drifted; team-verify may not be reachable.`,
+      };
+    }
+
+    return {
+      level: "ok",
+      detail: `verify-spawn ready (model-id token '${matched}' present)`,
     };
   } catch (err) {
     return {
