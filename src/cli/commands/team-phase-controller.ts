@@ -90,6 +90,27 @@ export interface TeamCollectReport {
  * the caller decides whether that's enough to transition; one bad signal
  * doesn't poison the entire batch. Exported for direct unit-testing.
  */
+/**
+ * Build the `transitionPhase` reason annotation for a `fixing` transition.
+ * Reports BOTH merge-conflict and verify-fail counts so the stage_history
+ * record (and any postmortem inspection) accurately reflects all triggers.
+ * Returns "0 verify-fail signal(s) detected" or similar only when both
+ * counts are zero — which should be unreachable since we only reach this
+ * branch when the controller picked `fixing`.
+ *
+ * Exported for direct unit-testing.
+ */
+export function buildFixingReason(conflictCount: number, signalCount: number): string {
+  const parts: string[] = [];
+  if (conflictCount > 0) parts.push(`${conflictCount} merge conflict(s)`);
+  if (signalCount > 0) parts.push(`${signalCount} verify-fail signal(s)`);
+  if (parts.length === 0) {
+    // Defensive: should never happen (fixing implies at least one trigger).
+    return "fixing trigger (unspecified)";
+  }
+  return `${parts.join(" + ")} detected`;
+}
+
 export function readVerifyFailSignals(
   pidDir: string,
   onWarn?: (msg: string) => void,
@@ -252,6 +273,10 @@ export function runTeamCollect(
   // signals at the start of every run). Story 3 only READS — never mutates.
   const verifyFailSignals = readVerifyFailSignals(pidDir, (m) => logLines.push(m));
   const hasVerifyFail = verifyFailSignals.length > 0;
+  // Tracks whether the signals actually drove a transition (vs being observed
+  // but suppressed by the allShardsPresent gate). Only the "triggered" case
+  // gets reported on TeamCollectReport — see GATE NOTE below.
+  let verifyFailTriggered = false;
 
   // Determine target phase.
   let targetPhase: TeamPhase;
@@ -334,7 +359,19 @@ export function runTeamCollect(
     // 'completed' → 'fixing'. If we're already in 'fixing' from a merge
     // conflict, stay 'fixing' and write BOTH artifacts so the fix-worker
     // (Story 4) has full context for both problem classes.
+    //
+    // GATE NOTE (critic MAJOR-2 mitigation): this block lives INSIDE
+    // `if (allShardsPresent)` by design. team-verify (Story 2) writes signal
+    // files only AFTER all workers' shards have landed and the verify pass
+    // executed; signals therefore cannot legitimately exist while workers
+    // are still running. If a stale signal file did appear pre-shard-completion
+    // (manual write, broken external tooling), the safer interpretation is to
+    // leave the team in `executing` and let workers finish — at which point
+    // team-verify's clear-on-start removes the stale signal before the next
+    // verify pass. Promoting verify-fail to a pre-shard transition would let
+    // a single corrupt file derail an otherwise-healthy in-flight team.
     if (hasVerifyFail) {
+      verifyFailTriggered = true;
       if (targetPhase === "completed") {
         targetPhase = "fixing";
         logLines.push(
@@ -407,7 +444,10 @@ export function runTeamCollect(
       targetPhase === "completed"
         ? "all shards present"
         : targetPhase === "fixing"
-          ? `${mergeConflicts?.length ?? 0} merge conflict(s) detected`
+          ? buildFixingReason(
+              mergeConflicts?.length ?? 0,
+              hasVerifyFail ? verifyFailSignals.length : 0,
+            )
           : "dead worker(s) without shard";
     const updated = transitionPhase(sessionId, targetPhase, reason);
     finalPhase = updated.current_phase ?? targetPhase;
@@ -420,7 +460,7 @@ export function runTeamCollect(
     allShardsPresent,
     hasDeadWithoutShard,
     mergeConflicts,
-    verifyFailSignals: hasVerifyFail ? verifyFailSignals : undefined,
+    verifyFailSignals: verifyFailTriggered ? verifyFailSignals : undefined,
     logLines,
   };
 }

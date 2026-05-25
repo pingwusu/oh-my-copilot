@@ -34,6 +34,7 @@ import {
   type TeamPhase,
 } from "../../../runtime/mode-state.js";
 import {
+  buildFixingReason,
   readVerifyFailSignals,
   runTeamCollect,
   type VerifyFailSignal,
@@ -873,6 +874,58 @@ describe("runTeamCollect v2.1 — verify-fail + merge-conflict combined", () => 
           (l.includes("merge conflicts") || l.includes("staying in")),
       ),
     ).toBe(true);
+  });
+});
+
+// ─── v2.1 Story 3: allShardsPresent gate (design-intent lock) ─────────────────
+
+describe("runTeamCollect v2.1 — verify-fail gate behind allShardsPresent", () => {
+  it("does NOT transition to fixing when signal present but workers still alive without shards", () => {
+    // Documents the design intent surfaced by critic review: signals are only
+    // legitimate after all workers' shards have landed. A stale or external
+    // signal during executing should NOT derail an in-flight team.
+    const sessionId = "sess-v21-gate";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70081);
+    writePidFile(pidDir, 2, 70082);
+    // No shards written — workers still executing.
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true, // workers alive
+    });
+
+    // Stays executing — signal is ignored until all shards land.
+    expect(report.finalPhase).toBe("executing");
+    expect(report.verifyFailSignals).toBeUndefined();
+    expect(
+      fs.existsSync(path.join(pidDir, "verify-fail-summary.json")),
+    ).toBe(false);
+  });
+});
+
+// ─── v2.1 Story 3 supplement: buildFixingReason ───────────────────────────────
+
+describe("buildFixingReason (v2.1 P1 reason-string helper)", () => {
+  it("reports merge conflicts only when no verify-fail signals", () => {
+    expect(buildFixingReason(3, 0)).toBe("3 merge conflict(s) detected");
+  });
+
+  it("reports verify-fail signals only when no merge conflicts", () => {
+    expect(buildFixingReason(0, 2)).toBe("2 verify-fail signal(s) detected");
+  });
+
+  it("reports BOTH when both triggers present", () => {
+    expect(buildFixingReason(1, 4)).toBe(
+      "1 merge conflict(s) + 4 verify-fail signal(s) detected",
+    );
+  });
+
+  it("returns defensive placeholder when both counts are zero (should be unreachable)", () => {
+    expect(buildFixingReason(0, 0)).toBe("fixing trigger (unspecified)");
   });
 });
 
