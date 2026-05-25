@@ -59,6 +59,7 @@ import {
 } from "./commands/team-verify.js";
 import { runTeamWait } from "./commands/team-wait.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
+import { runTeamOutboxWriteCli } from "./commands/team-outbox.js";
 import {
   ChainParseError,
   parseChainSpec,
@@ -384,6 +385,21 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           maxLoops: opts.maxLoops,
           shardTimeoutMs: opts.shardTimeout,
         });
+      },
+    );
+
+  program
+    .command("team-outbox-write <session-id> <consumer> <json-payload>")
+    .description(
+      "Append a JSONL entry to the per-session outbox (EB-06 IPC mesh). Uses a hand-rolled lockfile sidecar + exponential backoff + 30s stale-lockfile cleanup. Line cap 64KB. Exit 0/2/4 per ADR-omcp-eb-02.",
+    )
+    .action(
+      (sessionId: string, consumer: string, jsonPayload: string) => {
+        process.exitCode = runTeamOutboxWriteCli(
+          sessionId,
+          consumer,
+          jsonPayload,
+        );
       },
     );
 
