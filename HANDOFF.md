@@ -9,6 +9,16 @@
 
 ---
 
+## v1.8.0 deliverables (history)
+
+Cut 2026-05-25 at f2708c5. v1.8 closes the largest version arc of the
+v1.7→v2.0 roadmap: first-time live verification of all 10 MCP
+servers, 19 agents QA matrix, cost-governor outer-loop (ADR-C1
+closed), and CHANGELOG-tagged removal of unimplemented ultraqa+sciomc
+modes per iter-3 plan Section L#2 option C.
+
+See CHANGELOG.md [1.8.0] for the full commit list.
+
 ## v1.7.0 deliverables (this session)
 
 7 commits + tag atop v1.6.0 (095af3e):

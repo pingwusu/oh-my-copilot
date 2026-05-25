@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-05-25
+
+### Notable — first-time live MCP verification + outer-loop cost-governor + plan iter-3 consensus
+
+This version closes US-1.8 across 4 tiers + the v1.7 ADR-deferred
+US-05 cost-governor outer-loop. First time omcp has live-verified
+all 10 MCP servers + the shared runtime shim via real CLI exercise
+(not deterministic mocks).
+
+Tests: 1178 → 1298 passing (+120 net), 2 skipped, 1 pre-existing
+worker-fork EPERM file-level baseline (unchanged since v0.4.0).
+
 ### Removed
 - `ultraqa` and `sciomc` modes removed from default LOOPING_MODES per
   iter-3 plan Section L#2 auto-triage option C. Both modes lacked
@@ -17,6 +29,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   no skill content backed them). Removed cleanly to honor the "no kicking
   can" principle. May be re-introduced in a future minor with full skill
   content + state module + e2e verification.
+
+### Tier 1 — LOOPING_MODES live verify
+- `fdeb11a` test(ralph-resanity): ...
+- `4be562d` test(team-live): ...
+- `f2708c5` docs(smoke): autopilot + ultrawork live verify ...
+- `4ae904b` feat(mode): remove ultraqa + sciomc from LOOPING_MODES (option C per iter-3 Section L#2)
+
+### Tier 3 — 10 MCP server live e2e
+- `c51c4a9` test(mcp-servers): det matrix (10 servers via it.each)
+- `aa91340` test(mcp-runtime-shim): canary-zero det harness
+- `85b90b4` test(mcp-code-intel): fixture scaffold
+- `8854965` test(mcp-live): real-CLI smoke runner + 11/11 PASS
+- `fac3ed9` refactor(tests): extract shared McpClient helper (deslop, -168 lines)
+
+### Tier 4 — 19-agent QA matrix + routing
+- `aa4a608` test(agents): 19-agent QA matrix (zero banned-token violations)
+- `050afc9` feat(verify-catalog): agent-catalog drift detection
+- `14c3ba4` test(routing): OMCP_MODEL_FAMILY 3-mode routing test
+
+### Tier 0 — Baseline + auth pre-checks
+- `0b0460b` chore(baseline): v1.7.0 baseline reverify attestation + working-section header
+- `d68156b` chore(auth): T0 auth precheck attestation
+- `5698cd4` docs(smoke): canary live-e2e template
+
+### US-05 — Cost-governor outer-loop (ADR-C1 Option C)
+- `974a438` feat(cost-governor): per-iteration outer-loop cost-summary
+  state — closes v1.7 ADR-deferred US-05 (Option C: keep PostToolUse
+  for tool-level metrics, add post-spawn callback in mode.ts that
+  writes .omcp/state/<sessionId>/cost-summary.json)
+
+### v1.9 pull-forward
+- `75ee12a` feat(doctor): add check-mcp-config integrity check
+
+### Planning artifact
+- `73fd9a2` docs(plans): v1.8->v2.0 ralplan iter-3 consensus (138
+  stories / 7-9 sessions; 4 ADRs; 7 USER_REQUIRED blockers; 5 CPs)
 
 ## [1.7.0] — 2026-05-25
 
