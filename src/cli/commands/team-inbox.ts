@@ -217,11 +217,15 @@ export function findCurrentInboxIndex(pidDir: string): number {
   return max;
 }
 
+/**
+ * Synchronous sleep via Atomics.wait — sibling of team-outbox's helper.
+ * Kernel-level wait avoids the CPU-burn cascade under multi-process lock
+ * contention (see team-outbox defaultBusyWait commentary).
+ */
 function defaultBusyWait(ms: number): void {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    // intentional busy-wait — sibling pattern to outbox
-  }
+  if (ms <= 0) return;
+  const view = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(view, 0, 0, ms);
 }
 
 // ─── CLI wrapper ─────────────────────────────────────────────────────────────

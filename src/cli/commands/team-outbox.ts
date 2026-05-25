@@ -125,6 +125,11 @@ export function runTeamOutboxWrite(
   const { line, truncated, originalBytes } = serializeLineWithCap(fullEntry);
 
   // Acquire lockfile via exponential backoff.
+  // On Windows NTFS the openSync('wx') ↔ rmSync race can surface transient
+  // EBUSY / EPERM / ENOENT when one writer's lock-release overlaps another
+  // writer's lock-acquire. These are not real failures — treat them as
+  // retryable just like EEXIST.
+  const RETRYABLE_LOCK_ERRORS = new Set(["EEXIST", "EBUSY", "EPERM", "ENOENT"]);
   let lockFd: number | undefined;
   let retries = 0;
   let staleLockfileRemoved = false;
@@ -133,7 +138,8 @@ export function runTeamOutboxWrite(
       lockFd = openSync(lockPath, "wx");
       break;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (!RETRYABLE_LOCK_ERRORS.has(code)) {
         // Unexpected error path — bubble up.
         return {
           exitCode: 1,
@@ -144,15 +150,19 @@ export function runTeamOutboxWrite(
         };
       }
       // EEXIST — check if it's a stale lock from a crashed prior writer.
-      try {
-        const lockMtime = statSync(lockPath).mtimeMs;
-        if (Date.now() - lockMtime > staleLockMs) {
-          rmSync(lockPath, { force: true });
-          staleLockfileRemoved = true;
-          continue; // retry immediately after stale-cleanup
+      // (Only stat when the file actually exists; ENOENT/EBUSY/EPERM means
+      // the lock is transitioning, not held.)
+      if (code === "EEXIST") {
+        try {
+          const lockMtime = statSync(lockPath).mtimeMs;
+          if (Date.now() - lockMtime > staleLockMs) {
+            rmSync(lockPath, { force: true });
+            staleLockfileRemoved = true;
+            continue; // retry immediately after stale-cleanup
+          }
+        } catch {
+          // stat raced with another process's release; try again
         }
-      } catch {
-        // stat raced with another process's release; try again
       }
       // Backoff + retry.
       if (i >= backoff.length) {
@@ -288,11 +298,16 @@ export function serializeLineWithCap(entry: OutboxLineEntry): SerializeResult {
   };
 }
 
+/**
+ * Synchronous sleep using Atomics.wait on a never-notified SharedArrayBuffer.
+ * Yields the thread to the kernel scheduler (unlike a date-loop busy-wait,
+ * which burns CPU and starves other contenders under 8-process load — the
+ * EB-06 concurrency-lane regression that surfaced this fix).
+ */
 function defaultBusyWait(ms: number): void {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    // intentional busy-wait — matches existing shutdownTeam pattern
-  }
+  if (ms <= 0) return;
+  const view = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(view, 0, 0, ms);
 }
 
 // ─── CLI wrapper ─────────────────────────────────────────────────────────────
