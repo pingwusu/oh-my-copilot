@@ -1077,6 +1077,28 @@ const VERIFY_SPAWN_TIMEOUT_MS = 30000;
 const MODEL_ID_TOKENS = ["gpt-", "claude-"] as const;
 
 /**
+ * Detect whether a spawnSync result was killed by its `timeout` option.
+ *
+ * POSIX: spawnSync sets `signal` to a non-null string ("SIGTERM") when the
+ * timeout fires.
+ *
+ * Windows: spawnSync exposes the timeout via `result.error.code === "ETIMEDOUT"`
+ * (the `.message` string is not a reliable check — Node's SystemError carries
+ * the canonical reason on `.code`).
+ *
+ * Exported for direct unit-testing without spawning a real child process.
+ */
+export function detectVerifySpawnTimeout(r: {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  errorCode?: string;
+}): boolean {
+  if (r.signal !== null) return true;
+  if (r.status === null && r.errorCode === "ETIMEDOUT") return true;
+  return false;
+}
+
+/**
  * Probe whether the Copilot CLI's `-p` mode produces a recognizable model-id
  * token. Spawns `copilot -p "echo verify-spawn-check"`; returns ok when exit 0
  * AND stdout contains `gpt-` or `claude-`. Anything else → warn with the
@@ -1097,15 +1119,15 @@ export function probeVerifySpawnShape(
       timeout: VERIFY_SPAWN_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    // spawnSync sets `signal` to "SIGTERM" when killed by timeout on POSIX,
-    // or returns status=null with signal=null on Windows. Detect either shape.
-    const timedOut =
-      r.signal !== null || (r.status === null && r.error?.message?.includes("ETIMEDOUT"));
     return {
       status: r.status,
       stdout: (r.stdout as string | null) ?? "",
       stderr: (r.stderr as string | null) ?? "",
-      timedOut: Boolean(timedOut),
+      timedOut: detectVerifySpawnTimeout({
+        status: r.status,
+        signal: r.signal,
+        errorCode: (r.error as { code?: string } | undefined)?.code,
+      }),
     };
   });
 

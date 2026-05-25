@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  detectVerifySpawnTimeout,
   probeVerifySpawnShape,
   type CopilotVerifySpawnResult,
   runDoctor,
@@ -113,6 +114,42 @@ describe("probeVerifySpawnShape (injectable spawn)", () => {
     probeVerifySpawnShape(mockSpawn);
     expect(capturedCmd).toBe("copilot");
     expect(capturedArgs).toEqual(["-p", "echo verify-spawn-check"]);
+  });
+});
+
+describe("detectVerifySpawnTimeout (POSIX + Windows shapes)", () => {
+  it("returns true when signal fired (POSIX SIGTERM on timeout)", () => {
+    expect(
+      detectVerifySpawnTimeout({ status: null, signal: "SIGTERM" }),
+    ).toBe(true);
+  });
+
+  it("returns true when status null + errorCode ETIMEDOUT (Windows shape)", () => {
+    expect(
+      detectVerifySpawnTimeout({
+        status: null,
+        signal: null,
+        errorCode: "ETIMEDOUT",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false on clean exit (status 0, no signal)", () => {
+    expect(detectVerifySpawnTimeout({ status: 0, signal: null })).toBe(false);
+  });
+
+  it("returns false on non-zero exit (status 1, no signal, no errorCode)", () => {
+    expect(detectVerifySpawnTimeout({ status: 1, signal: null })).toBe(false);
+  });
+
+  it("returns false when status null but errorCode is unrelated (ENOENT)", () => {
+    expect(
+      detectVerifySpawnTimeout({
+        status: null,
+        signal: null,
+        errorCode: "ENOENT",
+      }),
+    ).toBe(false);
   });
 });
 
