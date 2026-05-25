@@ -26,7 +26,7 @@
     "sync:plugin": "node dist/scripts/sync-plugin-mirror.js",
     "release": "node dist/scripts/release.js",
     "postinstall": "node -e \"if(require('fs').existsSync('dist/scripts/postinstall.js'))require('child_process').spawnSync(process.execPath,['dist/scripts/postinstall.js'],{stdio:'inherit'})\"",
-    "prepack": "npm run build && npm run verify:plugin-bundle"
+    "prepack": "npm run build && npm run sync:plugin && npm run verify:plugin-bundle"
   },
   "files": [
     "dist/",
