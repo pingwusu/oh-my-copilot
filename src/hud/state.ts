@@ -1,7 +1,7 @@
 // HUD state loader — reads .omcp/state/*-state.json + .omcp/notepad.md
 // + ~/.copilot/config.json. All reads are graceful (errors become nulls).
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,6 +9,8 @@ import {
   type AutopilotStateForHud,
   type HudState,
   type ModelFamily,
+  type ModeIterForHud,
+  type PrdProgressForHud,
   type RalphStateForHud,
   type TeamStateForHud,
   type TodoItem,
@@ -250,6 +252,97 @@ export function readHudData(cwd: string): HudExternalData {
   };
 }
 
+/**
+ * Read the primary active looping mode + iteration for HUD column 1.
+ *
+ * Priority order: ralph > autopilot > (first other active mode with iter).
+ * Returns null when no looping mode is active.
+ */
+export function readModeIter(cwd: string): ModeIterForHud | null {
+  // Ralph takes priority.
+  const ralph = asObject(readJsonSafe(join(stateDir(cwd), "ralph-state.json")));
+  if (ralph && asBool(ralph.active)) {
+    const iter = asNumber(ralph.iteration) ?? asNumber(ralph.iter) ?? 0;
+    const max = asNumber(ralph.max_iterations) ?? asNumber(ralph.max) ?? 0;
+    if (iter > 0 || max > 0) {
+      return { modeName: "ralph", iteration: iter, maxIterations: max };
+    }
+  }
+  // Autopilot second.
+  const ap = asObject(readJsonSafe(join(stateDir(cwd), "autopilot-state.json")));
+  if (ap && asBool(ap.active)) {
+    const iter = asNumber(ap.iteration) ?? 0;
+    const max = asNumber(ap.max_iterations) ?? asNumber(ap.maxIterations) ?? 5;
+    return { modeName: "autopilot", iteration: iter, maxIterations: max };
+  }
+  return null;
+}
+
+/**
+ * Read PRD completion fraction for HUD column 2.
+ *
+ * Reads `.omcp/prd.json` (default path) and counts completed vs total
+ * userStories. Returns null when no PRD is present or it cannot be parsed.
+ */
+export function readPrdProgress(cwd: string): PrdProgressForHud | null {
+  const prdPath = join(cwd, ".omcp", "prd.json");
+  try {
+    if (!existsSync(prdPath)) return null;
+    const raw = readFileSync(prdPath, "utf8");
+    if (!raw.trim()) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    const obj = asObject(parsed);
+    if (!obj) return null;
+    const stories = Array.isArray(obj.userStories) ? obj.userStories : null;
+    if (!stories) return null;
+    const total = stories.length;
+    if (total === 0) return null;
+    const completed = stories.filter((s: unknown) => {
+      const so = asObject(s);
+      return so && (asBool(so.passes) || asString(so.status) === "completed");
+    }).length;
+    return { completed, total };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read total estimated cost from the most recent session's cost-summary.json
+ * for HUD column 6. Scans .omcp/state/ for session subdirs and picks the
+ * most recently modified cost-summary.json. Returns 0 when none found.
+ */
+export function readEstimatedCostTotal(cwd: string): number {
+  const stateRoot = stateDir(cwd);
+  try {
+    if (!existsSync(stateRoot)) return 0;
+    const entries = readdirSync(stateRoot, { withFileTypes: true });
+    let best: { mtime: number; total: number } | null = null;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const candidate = join(stateRoot, entry.name, "cost-summary.json");
+      if (!existsSync(candidate)) continue;
+      try {
+        const mtime = statSync(candidate).mtimeMs;
+        const obj = asObject(readJsonSafe(candidate));
+        if (!obj || !Array.isArray(obj.entries)) continue;
+        const total = (obj.entries as unknown[]).reduce((sum: number, e: unknown) => {
+          const eo = asObject(e);
+          return sum + (asNumber(eo ? eo.estimatedCost : null) ?? 0);
+        }, 0);
+        if (best === null || mtime > best.mtime) {
+          best = { mtime, total };
+        }
+      } catch {
+        // skip unreadable entries
+      }
+    }
+    return best?.total ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function readPriorityNote(cwd: string): string | null {
   try {
     const file = join(cwd, ".omcp", "notepad.md");
@@ -288,5 +381,8 @@ export function loadHudState(
     sessionTotalTokens: ext.sessionTotalTokens,
     priorityNote: readPriorityNote(cwd),
     thresholds: DEFAULT_THRESHOLDS,
+    modeIter: readModeIter(cwd),
+    prd: readPrdProgress(cwd),
+    estimatedCostTotal: readEstimatedCostTotal(cwd),
   };
 }

@@ -59,6 +59,20 @@ export interface GitInfo {
   branch: string | null;
 }
 
+export interface PrdProgressForHud {
+  completed: number;
+  total: number;
+}
+
+export interface ModeIterForHud {
+  /** Primary active mode name (e.g. "ralph", "autopilot"). */
+  modeName: string;
+  /** Current outer-loop iteration (1-based). */
+  iteration: number;
+  /** Max iterations for the outer loop. */
+  maxIterations: number;
+}
+
 export interface HudState {
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -74,6 +88,12 @@ export interface HudState {
   sessionTotalTokens: number | null;
   priorityNote: string | null;
   thresholds: HudThresholds;
+  /** Column 1: primary mode + iteration (null when no looping mode active). */
+  modeIter: ModeIterForHud | null;
+  /** Column 2: PRD progress fraction (null when no PRD present). */
+  prd: PrdProgressForHud | null;
+  /** Column 6: estimated cost total across all outer-loop iterations (0 = placeholder). */
+  estimatedCostTotal: number;
 }
 
 export interface HudElement {

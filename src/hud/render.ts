@@ -9,9 +9,12 @@
 
 import { renderAutopilot } from "./elements/autopilot.js";
 import { renderContext } from "./elements/context.js";
+import { renderCost } from "./elements/cost.js";
 import { renderGit } from "./elements/git.js";
 import { renderModel } from "./elements/model.js";
+import { renderModeIter, renderMultiMode } from "./elements/mode-iter.js";
 import { renderNotepadPriority } from "./elements/notepad-priority.js";
+import { renderPrdProgress } from "./elements/prd-progress.js";
 import { renderRalph } from "./elements/ralph.js";
 import { renderTodos } from "./elements/todos.js";
 import { renderTokenUsage } from "./elements/token-usage.js";
@@ -56,8 +59,18 @@ function renderTeamLegacy(state: HudState): string {
 /**
  * Optional elements — each returns string | null where null = hidden.
  * The order here is the rendered order in the rich tail of the line.
+ *
+ * New v1.9 columns appear first in the rich tail:
+ *   col 1: mode+iter (renderModeIter) — single-mode with iteration counts
+ *   col 1 multi: renderMultiMode — when 2+ modes active, shows comma-joined
+ *   col 2: prd progress (renderPrdProgress)
+ *   col 6: cost/tokens estimate (renderCost)
  */
 const OPTIONAL_ELEMENTS: HudElement[] = [
+  renderModeIter,
+  renderMultiMode,
+  renderPrdProgress,
+  renderCost,
   renderModel,
   renderContext,
   renderTokenUsage,
