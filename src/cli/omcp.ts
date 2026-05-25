@@ -53,6 +53,7 @@ import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam, runTeamMergeShards, runTeamWatchdog } from "./commands/team.js";
 import { runTeamCollect } from "./commands/team-phase-controller.js";
 import { runTeamAckCli } from "./commands/team-ack.js";
+import { runTeamVerifyCli } from "./commands/team-verify.js";
 import {
   formatTeleportList,
   listTeleports,
@@ -310,6 +311,20 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     )
     .action((sessionId: string, workerIndex: string) => {
       process.exitCode = runTeamAckCli(sessionId, workerIndex);
+    });
+
+  program
+    .command("team-verify <session-id>")
+    .description(
+      "Run vitest+tsc+biome verify pass; write verify-report-N.json + worker-K-verify-fail.json signals (Phase 1 verify/fix loop)",
+    )
+    .option(
+      "--max-loops <n>",
+      "max fix-loop iterations (default 3; env OMCP_TEAM_MAX_FIX_LOOPS overrides; Story 5 enforces the bound)",
+      (v) => Number(v),
+    )
+    .action((sessionId: string, opts: { maxLoops?: number }) => {
+      process.exitCode = runTeamVerifyCli(sessionId, { maxLoops: opts.maxLoops });
     });
 
   program
