@@ -310,11 +310,19 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   program
     .command("team-ack <session-id> <worker-index>")
     .description(
-      "Write worker-side shutdown ack — call when shutdown-request.json is detected (L2.7 protocol)",
+      "Write worker-side shutdown ack — call when shutdown-request.json is detected (L2.7 protocol). v2.1 N+2: --status pending|in_progress|completed|failed updates TeamState.workers[K].status atomically.",
     )
-    .action((sessionId: string, workerIndex: string) => {
-      process.exitCode = runTeamAckCli(sessionId, workerIndex);
-    });
+    .option(
+      "--status <state>",
+      "update TeamState.workers[K].status (pending | in_progress | completed | failed)",
+    )
+    .action(
+      (sessionId: string, workerIndex: string, opts: { status?: string }) => {
+        process.exitCode = runTeamAckCli(sessionId, workerIndex, {
+          status: opts.status,
+        });
+      },
+    );
 
   program
     .command("team-verify <session-id>")
