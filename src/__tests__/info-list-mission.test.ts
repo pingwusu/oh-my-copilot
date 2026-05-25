@@ -15,7 +15,8 @@ const ROOT = join(__dirname, "..", "..");
 describe("info", () => {
   it("reports installation state + catalog counts", () => {
     const r = readInfo(ROOT);
-    expect(r.version).toMatch(/^\d+\.\d+\.\d+$/);
+    // Accept prerelease tags per semver spec (e.g., 2.0.0-rc.1)
+    expect(r.version).toMatch(/^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/);
     expect(r.agentCount).toBeGreaterThanOrEqual(19);
     expect(r.skillCount).toBeGreaterThanOrEqual(30);
     expect(r.mcpServers.length).toBeGreaterThanOrEqual(4);

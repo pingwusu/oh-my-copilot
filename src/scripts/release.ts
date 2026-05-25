@@ -17,7 +17,10 @@ interface SemVer {
 }
 
 function parseSemver(s: string): SemVer {
-  const m = s.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  // Accept prerelease tags per semver spec (e.g., 2.0.0-rc.1) — they are
+  // parsed but the prerelease component is discarded for bump arithmetic.
+  // Bumping from a prerelease drops the suffix (rc.1 patch -> next patch).
+  const m = s.match(/^(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9.]+)?$/);
   if (!m) throw new Error(`bad semver: ${s}`);
   return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
 }

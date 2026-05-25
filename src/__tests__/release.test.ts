@@ -5,13 +5,14 @@ describe("release", () => {
   it("dry-run reports next version without writing", () => {
     const r = release(["--dry-run", "patch"]);
     expect(r.dryRun).toBe(true);
-    expect(r.from).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(r.to).toMatch(/^\d+\.\d+\.\d+$/);
+    // Accept prerelease tags per semver spec (e.g., 2.0.0-rc.1)
+    expect(r.from).toMatch(/^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/);
+    expect(r.to).toMatch(/^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/);
     expect(r.touched).toContain("package.json");
     expect(r.touched).toContain(".claude-plugin/plugin.json");
     expect(r.touched).toContain(".agents/plugins/marketplace.json");
     expect(r.touched).toContain("CHANGELOG.md");
-    expect(r.tag).toMatch(/^v\d+\.\d+\.\d+$/);
+    expect(r.tag).toMatch(/^v\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$/);
   });
 
   it("dry-run with explicit semver target", () => {
