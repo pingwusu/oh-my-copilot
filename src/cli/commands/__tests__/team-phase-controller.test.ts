@@ -33,7 +33,11 @@ import {
   type TeamState,
   type TeamPhase,
 } from "../../../runtime/mode-state.js";
-import { runTeamCollect } from "../team-phase-controller.js";
+import {
+  readVerifyFailSignals,
+  runTeamCollect,
+  type VerifyFailSignal,
+} from "../team-phase-controller.js";
 import { writeShardState } from "../../../lib/team-shard-state.js";
 import { writePrd, writeRalphState } from "../../../lib/ralph-state.js";
 import type { PRD, RalphState } from "../../../lib/ralph-state.js";
@@ -593,6 +597,306 @@ describe("runTeamCollect v1.3 — conflict count in log", () => {
     expect(
       report.logLines.some((l) => l.includes("conflicts.json") || l.includes("conflicts written")),
     ).toBe(true);
+  });
+});
+
+// ─── v2.1 Story 3: verify-fail short-circuit helpers ──────────────────────────
+
+function writeVerifyFailSignal(
+  pidDir: string,
+  workerIndex: number,
+  iteration: number,
+  failedTools: string[],
+): void {
+  fs.mkdirSync(pidDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pidDir, `worker-${workerIndex}-verify-fail.json`),
+    JSON.stringify(
+      {
+        workerIndex,
+        iteration,
+        ts: new Date().toISOString(),
+        failedTools,
+        reportPath: `verify-report-${iteration}.json`,
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+}
+
+// ─── v2.1 Story 3: readVerifyFailSignals ──────────────────────────────────────
+
+describe("readVerifyFailSignals (v2.1 P1)", () => {
+  it("returns empty array when pidDir absent", () => {
+    expect(readVerifyFailSignals(path.join(tmp, "absent"))).toEqual([]);
+  });
+
+  it("returns empty array when no worker-K-verify-fail.json files present", () => {
+    const pidDir = path.join(tmp, ".omcp", "state", "team", "no-signals");
+    fs.mkdirSync(pidDir, { recursive: true });
+    writePidFile(pidDir, 1, 700001);
+    expect(readVerifyFailSignals(pidDir)).toEqual([]);
+  });
+
+  it("parses and sorts signals by workerIndex", () => {
+    const pidDir = path.join(tmp, ".omcp", "state", "team", "parse-signals");
+    writeVerifyFailSignal(pidDir, 3, 1, ["vitest"]);
+    writeVerifyFailSignal(pidDir, 1, 1, ["tsc"]);
+    writeVerifyFailSignal(pidDir, 2, 1, ["biome", "vitest"]);
+
+    const signals = readVerifyFailSignals(pidDir);
+    expect(signals).toHaveLength(3);
+    expect(signals.map((s) => s.workerIndex)).toEqual([1, 2, 3]);
+    expect(signals[2].failedTools).toEqual(["vitest"]);
+    expect(signals[1].failedTools).toEqual(["biome", "vitest"]);
+  });
+
+  it("skips malformed JSON and surfaces a warning via onWarn callback", () => {
+    const pidDir = path.join(tmp, ".omcp", "state", "team", "malformed");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "worker-1-verify-fail.json"),
+      "{not valid json",
+      "utf8",
+    );
+    writeVerifyFailSignal(pidDir, 2, 1, ["vitest"]);
+
+    const warnings: string[] = [];
+    const signals = readVerifyFailSignals(pidDir, (m) => warnings.push(m));
+    expect(signals).toHaveLength(1);
+    expect(signals[0].workerIndex).toBe(2);
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.some((w) => w.includes("worker-1-verify-fail.json"))).toBe(true);
+  });
+
+  it("skips signals missing required fields and surfaces a warning", () => {
+    const pidDir = path.join(tmp, ".omcp", "state", "team", "missing-fields");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "worker-1-verify-fail.json"),
+      JSON.stringify({ workerIndex: 1, iteration: 1 }), // missing ts, failedTools, reportPath
+      "utf8",
+    );
+
+    const warnings: string[] = [];
+    const signals = readVerifyFailSignals(pidDir, (m) => warnings.push(m));
+    expect(signals).toHaveLength(0);
+    expect(warnings.some((w) => w.includes("malformed"))).toBe(true);
+  });
+
+  it("ignores non-matching filenames (worker-N.pid, worker-N-shard.json, conflicts.json)", () => {
+    const pidDir = path.join(tmp, ".omcp", "state", "team", "noise");
+    writePidFile(pidDir, 1, 700100);
+    writeShardFile(pidDir, 1);
+    fs.writeFileSync(path.join(pidDir, "conflicts.json"), "{}", "utf8");
+    fs.writeFileSync(
+      path.join(pidDir, "verify-report-1.json"),
+      JSON.stringify({ iteration: 1, ok: true }),
+      "utf8",
+    );
+    expect(readVerifyFailSignals(pidDir)).toEqual([]);
+  });
+});
+
+// ─── v2.1 Story 3: 0 signals → completed (regression) ─────────────────────────
+
+describe("runTeamCollect v2.1 — 0 verify-fail signals → completed (regression)", () => {
+  it("transitions to completed when all shards present and no verify-fail signals", () => {
+    const sessionId = "sess-v21-no-signals";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70011);
+    writePidFile(pidDir, 2, 70012);
+    writeShardFile(pidDir, 1);
+    writeShardFile(pidDir, 2);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(report.finalPhase).toBe("completed");
+    expect(report.verifyFailSignals).toBeUndefined();
+    // No verify-fail-summary.json should have been written.
+    expect(
+      fs.existsSync(path.join(pidDir, "verify-fail-summary.json")),
+    ).toBe(false);
+  });
+});
+
+// ─── v2.1 Story 3: 1+ verify-fail signal → fixing ─────────────────────────────
+
+describe("runTeamCollect v2.1 — verify-fail signal(s) → fixing", () => {
+  it("overrides completed → fixing when 1 verify-fail signal present", () => {
+    const sessionId = "sess-v21-one-signal";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70021);
+    writePidFile(pidDir, 2, 70022);
+    writeShardFile(pidDir, 1);
+    writeShardFile(pidDir, 2);
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(report.finalPhase).toBe("fixing");
+    expect(report.verifyFailSignals).toBeDefined();
+    expect(report.verifyFailSignals).toHaveLength(1);
+    expect(report.verifyFailSignals![0].workerIndex).toBe(1);
+    expect(report.verifyFailSignals![0].failedTools).toEqual(["vitest"]);
+
+    // verify-fail-summary.json must be written.
+    const summaryPath = path.join(pidDir, "verify-fail-summary.json");
+    expect(fs.existsSync(summaryPath)).toBe(true);
+    const summary = JSON.parse(fs.readFileSync(summaryPath, "utf8")) as {
+      sessionId: string;
+      signalCount: number;
+      signals: VerifyFailSignal[];
+    };
+    expect(summary.sessionId).toBe(sessionId);
+    expect(summary.signalCount).toBe(1);
+    expect(summary.signals[0].workerIndex).toBe(1);
+
+    // TeamState reflects fixing phase.
+    const state = readModeState<TeamState>("team", sessionId);
+    expect(state!.current_phase).toBe("fixing");
+  });
+
+  it("transitions to fixing when ALL workers have verify-fail signals", () => {
+    const sessionId = "sess-v21-all-signals";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70031);
+    writePidFile(pidDir, 2, 70032);
+    writePidFile(pidDir, 3, 70033);
+    writeShardFile(pidDir, 1);
+    writeShardFile(pidDir, 2);
+    writeShardFile(pidDir, 3);
+    writeVerifyFailSignal(pidDir, 1, 2, ["vitest"]);
+    writeVerifyFailSignal(pidDir, 2, 2, ["tsc"]);
+    writeVerifyFailSignal(pidDir, 3, 2, ["vitest", "biome"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(report.finalPhase).toBe("fixing");
+    expect(report.verifyFailSignals).toHaveLength(3);
+
+    const summary = JSON.parse(
+      fs.readFileSync(
+        path.join(pidDir, "verify-fail-summary.json"),
+        "utf8",
+      ),
+    ) as { signalCount: number; signals: VerifyFailSignal[] };
+    expect(summary.signalCount).toBe(3);
+    // Signals are sorted by workerIndex.
+    expect(summary.signals.map((s) => s.workerIndex)).toEqual([1, 2, 3]);
+    expect(summary.signals[2].failedTools).toEqual(["vitest", "biome"]);
+  });
+
+  it("log lines mention the verify-fail short-circuit reason", () => {
+    const sessionId = "sess-v21-log-reason";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70041);
+    writeShardFile(pidDir, 1);
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(
+      report.logLines.some(
+        (l) =>
+          l.includes("verify-fail signal") &&
+          (l.includes("fixing") || l.includes("'fixing'")),
+      ),
+    ).toBe(true);
+    expect(
+      report.logLines.some((l) => l.includes("verify-fail-summary.json")),
+    ).toBe(true);
+  });
+});
+
+// ─── v2.1 Story 3: verify-fail + merge-conflict → fixing with BOTH artifacts ──
+
+describe("runTeamCollect v2.1 — verify-fail + merge-conflict combined", () => {
+  it("transitions to fixing and writes BOTH conflicts.json AND verify-fail-summary.json", () => {
+    const sessionId = "sess-v21-both";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    seedPrd(tmp, [{ id: "US-VF1", passes: false }]);
+    writeShardState("wa", [{ id: "US-VF1", passes: true }], tmp);
+    writeShardState("wb", [{ id: "US-VF1", passes: false }], tmp);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70051);
+    writePidFile(pidDir, 2, 70052);
+    writeShardFile(pidDir, 1);
+    writeShardFile(pidDir, 2);
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+      teamName: "combined-team",
+    });
+
+    expect(report.finalPhase).toBe("fixing");
+    expect(report.mergeConflicts).toBeDefined();
+    expect(report.mergeConflicts!.length).toBeGreaterThan(0);
+    expect(report.verifyFailSignals).toBeDefined();
+    expect(report.verifyFailSignals).toHaveLength(1);
+
+    // BOTH artifacts must exist.
+    expect(fs.existsSync(path.join(pidDir, "conflicts.json"))).toBe(true);
+    expect(fs.existsSync(path.join(pidDir, "verify-fail-summary.json"))).toBe(true);
+
+    // Log line acknowledges the dual-trigger.
+    expect(
+      report.logLines.some(
+        (l) =>
+          l.includes("verify-fail") &&
+          (l.includes("merge conflicts") || l.includes("staying in")),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ─── v2.1 Story 3: back-compat — teamName optional ────────────────────────────
+
+describe("runTeamCollect v2.1 — back-compat with teamName omitted", () => {
+  it("verify-fail short-circuit triggers even when teamName not provided (v1.2 compat path)", () => {
+    const sessionId = "sess-v21-no-teamname";
+    seedTeamState(tmp, sessionId, "executing", ["initializing", "executing"]);
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70061);
+    writeShardFile(pidDir, 1);
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    // teamName intentionally omitted.
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(report.finalPhase).toBe("fixing");
+    expect(report.verifyFailSignals).toHaveLength(1);
+    expect(fs.existsSync(path.join(pidDir, "verify-fail-summary.json"))).toBe(true);
   });
 });
 

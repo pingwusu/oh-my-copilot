@@ -1,4 +1,4 @@
-// team-phase-controller.ts — Phase L2.5b / v1.3 extension
+// team-phase-controller.ts — Phase L2.5b / v1.3 extension / v2.1 P1 extension
 //
 // runTeamCollect(sessionId): inspect shard files + pidfile health, then
 // transition the team session to 'completed', 'failed', or 'fixing'.
@@ -7,6 +7,14 @@
 // mergeShards(). If MergeReport.conflicts is non-empty, transition to 'fixing'
 // instead of 'completed' and write conflicts.json for human/future-bot
 // resolution. Automatic conflict resolution is OUT OF SCOPE for v1.3 (v1.4+).
+//
+// v2.1 (US-omcp-parity-P1-COLLECT-needsfix-shortcircuit): when ANY worker has
+// a worker-K-verify-fail.json signal (written by `omcp team-verify` per Story
+// 2 of v2.1 N+1), short-circuit into 'fixing' instead of 'completed'. The
+// merge-conflict path is preserved; when BOTH verify-fail AND merge-conflict
+// are present the team STAYS in 'fixing' and writes BOTH conflicts.json AND
+// verify-fail-summary.json so downstream fix-worker spawn (Story 4) has full
+// context.
 //
 // Crash-restart resume: if a TeamState is found with current_phase='executing'
 // but no associated copilot process alive AND no shard written, detect + log.
@@ -38,6 +46,19 @@ export interface CollectWorkerResult {
   hasShard: boolean;
 }
 
+/**
+ * One entry from a worker-K-verify-fail.json signal file written by
+ * `omcp team-verify` (Story 2). Schema is the source of truth for what Story
+ * 3 reads — keep aligned with src/cli/commands/team-verify.ts.
+ */
+export interface VerifyFailSignal {
+  workerIndex: number;
+  iteration: number;
+  ts: string;
+  failedTools: string[];
+  reportPath: string;
+}
+
 export interface TeamCollectReport {
   sessionId: string;
   /** Final phase after collect (or the existing phase if already terminal). */
@@ -52,8 +73,62 @@ export interface TeamCollectReport {
    * 'fixing'. Written to conflicts.json for human or future-bot resolution.
    */
   mergeConflicts?: MergeConflict[];
+  /**
+   * Verify-fail signals harvested from worker-K-verify-fail.json files (v2.1
+   * P1 extension). Populated when team-verify wrote signals; consumed by
+   * Story 4 fix-worker spawn.
+   */
+  verifyFailSignals?: VerifyFailSignal[];
   /** Log lines for --verbose / test inspection. */
   logLines: string[];
+}
+
+/**
+ * Scan pidDir for `worker-K-verify-fail.json` signal files and parse them.
+ *
+ * Malformed JSON or missing required fields are skipped with a log line —
+ * the caller decides whether that's enough to transition; one bad signal
+ * doesn't poison the entire batch. Exported for direct unit-testing.
+ */
+export function readVerifyFailSignals(
+  pidDir: string,
+  onWarn?: (msg: string) => void,
+): VerifyFailSignal[] {
+  if (!existsSync(pidDir)) return [];
+  const out: VerifyFailSignal[] = [];
+  for (const f of readdirSync(pidDir)) {
+    const m = /^worker-(\d+)-verify-fail\.json$/.exec(f);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    try {
+      const raw = readFileSync(join(pidDir, f), "utf8");
+      const parsed = JSON.parse(raw) as Partial<VerifyFailSignal>;
+      if (
+        typeof parsed.workerIndex !== "number" ||
+        typeof parsed.iteration !== "number" ||
+        typeof parsed.ts !== "string" ||
+        !Array.isArray(parsed.failedTools) ||
+        typeof parsed.reportPath !== "string"
+      ) {
+        onWarn?.(`[team-collect] malformed verify-fail signal at ${f} — skipping`);
+        continue;
+      }
+      out.push({
+        workerIndex: parsed.workerIndex,
+        iteration: parsed.iteration,
+        ts: parsed.ts,
+        failedTools: parsed.failedTools.filter(
+          (s): s is string => typeof s === "string",
+        ),
+        reportPath: parsed.reportPath,
+      });
+    } catch (err) {
+      onWarn?.(
+        `[team-collect] failed to read verify-fail signal at ${f}: ${(err as Error).message} — skipping (idx=${idx})`,
+      );
+    }
+  }
+  return out.sort((a, b) => a.workerIndex - b.workerIndex);
 }
 
 /**
@@ -171,6 +246,13 @@ export function runTeamCollect(
     workers.length > 0 && workers.every((w) => w.hasShard);
   const hasDeadWithoutShard = workers.some((w) => !w.alive && !w.hasShard);
 
+  // Story 3 (v2.1 P1): harvest worker-K-verify-fail.json signals written by
+  // `omcp team-verify`. The signal set's lifecycle is owned by team-verify:
+  // signals exist iff the latest verify pass failed (team-verify clears stale
+  // signals at the start of every run). Story 3 only READS — never mutates.
+  const verifyFailSignals = readVerifyFailSignals(pidDir, (m) => logLines.push(m));
+  const hasVerifyFail = verifyFailSignals.length > 0;
+
   // Determine target phase.
   let targetPhase: TeamPhase;
   let mergeConflicts: MergeConflict[] | undefined;
@@ -247,6 +329,49 @@ export function runTeamCollect(
         `[team-collect] all ${workers.length} worker(s) wrote shards — transitioning to 'completed'`,
       );
     }
+
+    // Story 3 short-circuit: if any verify-fail signal is present, override
+    // 'completed' → 'fixing'. If we're already in 'fixing' from a merge
+    // conflict, stay 'fixing' and write BOTH artifacts so the fix-worker
+    // (Story 4) has full context for both problem classes.
+    if (hasVerifyFail) {
+      if (targetPhase === "completed") {
+        targetPhase = "fixing";
+        logLines.push(
+          `[team-collect] ${verifyFailSignals.length} worker(s) have verify-fail signal(s) — overriding 'completed' → 'fixing'`,
+        );
+      } else if (targetPhase === "fixing") {
+        logLines.push(
+          `[team-collect] verify-fail signals present alongside merge conflicts — staying in 'fixing' with both artifacts`,
+        );
+      }
+      // Write verify-fail-summary.json regardless of whether we got here via
+      // a fresh `completed → fixing` flip or a pre-existing conflicts path.
+      const summaryPath = join(pidDir, "verify-fail-summary.json");
+      try {
+        mkdirSync(pidDir, { recursive: true });
+        atomicWriteFileSync(
+          summaryPath,
+          JSON.stringify(
+            {
+              detectedAt: new Date().toISOString(),
+              sessionId,
+              signalCount: verifyFailSignals.length,
+              signals: verifyFailSignals,
+            },
+            null,
+            2,
+          ),
+        );
+        logLines.push(
+          `[team-collect] verify-fail summary written to ${summaryPath} — fix-worker will read from here`,
+        );
+      } catch {
+        logLines.push(
+          `[team-collect] warning: failed to write verify-fail-summary.json to ${summaryPath}`,
+        );
+      }
+    }
   } else if (hasDeadWithoutShard) {
     targetPhase = "failed";
     const deadWorkers = workers.filter((w) => !w.alive && !w.hasShard);
@@ -295,6 +420,7 @@ export function runTeamCollect(
     allShardsPresent,
     hasDeadWithoutShard,
     mergeConflicts,
+    verifyFailSignals: hasVerifyFail ? verifyFailSignals : undefined,
     logLines,
   };
 }
