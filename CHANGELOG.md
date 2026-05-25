@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.0] — 2026-05-25
+
+### Notable — omc-team feature parity (Option B-minus): verify/fix loop + chain orchestration + worker-status atomic-rewrite
+
+This version closes the iter-2 plan's 20-story arc across 3 sessions
+(N+1: Phase 1 verify/fix loop; N+2: Phase 2.5 ack-status + Phase 3
+chain orchestration; N+3: Phase 4 polish + ADR + release). The
+omcp team mode now self-corrects through a bounded verify/fix loop
+and composes with ralplan/ralph via the new `omcp ralplan --chain`
+flag — closing the 70%-PLATFORM-IMPOSED parity gap against omc's
+5-stage state machine, modulo the deferred Phase 2 IPC mesh.
+
+Tests: 1356+ baseline → **1469+ passing** (+113 net deterministic
+vitest cases across 20 stories), 2 skipped, 1 pre-existing
+worker-fork EPERM file-level baseline (unchanged since v0.4.0).
+
+### Added — Phase 1 verify/fix loop (Gap 1, N+1 session, 6 stories)
+
+- **`omcp doctor verify-spawn shape`** — new probe that gates
+  `omcp team-verify` readiness; asserts `copilot -p "echo verify-spawn-check"`
+  returns exit-0 + a recognizable model-id token (`gpt-`/`claude-`)
+  with a 30s timeout. Catches Copilot CLI argv-shape drift before
+  verify-worker spawns silently no-op (pre-mortem scenario 1).
+- **`omcp team-verify <sid> [--max-loops N]`** — new CLI: runs
+  vitest → tsc → biome sequentially, writes
+  `.omcp/state/team/<sid>/verify-report-N.json`, and on failure
+  writes per-worker `worker-K-verify-fail.json` signals consumed by
+  the next collect. Clears stale signals at the start of each run
+  so passing iterations don't leak fix-needed state forward.
+- **`omcp team-collect <sid>`** extended: when ANY worker signal is
+  present, transitions team to `fixing` (overriding `completed`) and
+  writes the aggregated `verify-fail-summary.json`. The asymmetric
+  clear contract: signals + merge-conflicts coexist as `fixing`
+  with both artifacts on disk.
+- **`omcp team-fix <sid> [--max-loops N]`** — new CLI: spawns a
+  Copilot debugger fix-worker with the verify-report tail in the
+  prompt. fix_loop_count tracked atomically in TeamState; bound check
+  enforced at BOTH `runTeamCollect` (refuses to advance to fixing
+  when exhausted) and `spawnFixWorker` (refuses to spawn). Default
+  3, env `OMCP_TEAM_MAX_FIX_LOOPS` overrides.
+- **Phase 1 deterministic smoke** at
+  `docs/smoke/omcp-team-parity/phase1-verify-fix-loop-deterministic-attestation.md`
+  via the shared `src/lib/smoke-template.ts` renderer.
+
+### Added — Phase 2.5 worker status (Gap 3, N+2 lead-in)
+
+- **`omcp team-ack <sid> <idx> --status <state>`** — new optional flag
+  on the existing team-ack verb. Valid states: `pending |
+  in_progress | completed | failed`. Updates
+  `TeamState.workers[K].status` atomically via writeModeState
+  (Invariant 2). Idempotent overwrite path preserved when --status
+  omitted (back-compat with v2.0 ack-only callers).
+
+### Added — Phase 3 chain orchestration (N+2 session, 8 stories)
+
+- **`omcp ralplan --chain "<spec>"`** — new orchestration flag.
+  Spec grammar: `--then <verb> [args...]` repeats. Example:
+  `--chain "--then team 4 fix-typo --then ralph-verify"`.
+- **`runChain` sequential runner** with crash-resumable
+  `.omcp/state/chain-state.json` marker carrying
+  `{currentStep, totalSteps, completedSteps, ts, status, steps}`.
+- **5-step atomic state-handoff** between consecutive chain steps:
+  read from-mode state → write `chain-handoffs/step-N.json`
+  snapshot → write chain-state.json with
+  `status='handing-off-to-<toMode>'` → asymmetric clear (only when
+  to-mode is `mutuallyExclusive=true`) → spawn to-mode. Crash-
+  survivor vitest covers the kill -9 window.
+- **Phase 1 TeamState preservation** through handoff —
+  `fix_loop_count`, `current_phase`, `stage_history`, `started_at`,
+  `workers[].status` all survive verbatim. Typed reader at
+  `src/lib/chain-handoff-reader.ts` exposes
+  `readChainHandoff` + `getTeamHandoffPhase1Metadata`.
+- **`omcp cancel` chain-aware propagation** — auto-detects active
+  chain-state.json and signals current step's mode-state.cancelled=true
+  + clears the chain marker. Per
+  `docs/adr/ADR-omcp-cancel-semantics.md`: 8 cancel-honoring modes
+  (ralph/autopilot/ultrawork/ultraqa/sciomc/ralplan/ultragoal/team-verify)
+  + 2 cancel-best-effort modes (team-launch / spawnFixWorker —
+  user must run `omcp team-stop <sid>` follow-up).
+- **`omcp team-wait <sid> [--timeout <secs>]`** — new poll-based CLI
+  for terminal-phase blocking. Exit 0 completed / 1 failed / 2
+  timeout / 3 not-found. Default timeout 1800s, env
+  `OMCP_TEAM_WAIT_TIMEOUT_S` overrides. Explicitly polling, no IPC
+  dependency.
+- **ralph SKILL.md sub-team dispatch guide** — new
+  `Parallel subtask dispatch via team` section with decision
+  criteria + dispatch protocol + 3 anti-patterns. When ralph
+  identifies ≥3 independent stories that do not share files, it
+  SHOULD dispatch via `omcp team N:executor` + `omcp team-wait`.
+- **Phase 3 deterministic smoke** at
+  `docs/smoke/omcp-team-parity/phase3-chain-deterministic-attestation.md`.
+
+### Added — Phase 4 polish + integration (N+3 session)
+
+- **team-worker SKILL.md** shutdown protocol updated to use
+  `omcp team-ack --status completed|failed|pending` per worker
+  disposition. Adds an explicit "no `omcp team-heartbeat`" note
+  pointing readers to EB-omcp-parity-06 for the deferred IPC mesh.
+- **Phase 4 full-stack integration smoke** at
+  `docs/smoke/omcp-team-parity/phase4-integration-deterministic-attestation.md`
+  exercising every v2.1 surface in a single trace (10 phases A..J,
+  4-worker team with verify-fail injection + fix-worker spawn +
+  re-verify pass + 4× --status ack + team→ralph handoff + chain
+  completion).
+- **3 ADRs**:
+  - `docs/adr/ADR-omcp-team-omc-parity-iter2.md` — master decision
+    record for the entire iter-2 arc (this CHANGELOG's source-of-truth).
+  - `docs/adr/ADR-omcp-cancel-semantics.md` — mid-step cancel matrix.
+  - `docs/adr/ADR-omcp-status-fix-loop-count-deferred.md` —
+    `omcp status` fix_loop_count surface deferred to post-v2.1.x.
+
+### Deferred-not-missing (per EB-omcp-parity-06)
+
+Phase 2 IPC mesh (inbox / outbox / heartbeat / worker-skill IPC
+update / IPC smoke — 6 stories) is deferred until ≥1 external user
+reports IPC mesh as a workflow blocker. The deferred story IDs are
+preserved verbatim in `docs/plans/omcp-team-omc-parity-iter2.md`
+Appendix B for direct lift into a future ralplan iter. Users mixing
+omc + omcp workflows will notice the asymmetry: omcp team workers
+coordinate via shard JSON + verify-fail-summary.json instead of
+inbox.md / outbox.jsonl / heartbeat.json.
+
+### Smoke artifacts
+
+Live-mode tag-gate per iter-2 plan §RELEASE-cut: ≥1 real-Copilot
+smoke artifact across P1/P3/P4 is required before the v2.1.0 LOCAL
+tag cuts. The release-time script `src/scripts/check-live-smoke.ts`
+enforces this — exits 1 with explicit "v2.1.0 LOCAL tag blocked"
+message if all 3 artifacts are deterministic-only.
+
+Artifacts on disk after this release:
+- `docs/smoke/omcp-team-parity/phase1-verify-fix-loop-deterministic-attestation.md`
+- `docs/smoke/omcp-team-parity/phase3-chain-deterministic-attestation.md`
+- `docs/smoke/omcp-team-parity/phase4-integration-deterministic-attestation.md`
+
 ## [1.8.0] — 2026-05-25
 
 ### Notable — first-time live MCP verification + outer-loop cost-governor + plan iter-3 consensus
