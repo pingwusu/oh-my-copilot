@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "session_id": "cc5fb6cf-e961-4eec-8de1-dd3b910f988f",
+  "started_at": "2026-05-25T15:24:05.638Z",
+  "spawned": 2,
+  "done": 0,
+  "workers": [
+    {
+      "id": "worker-1",
+      "agent": "executor",
+      "status": "pending"
+    },
+    {
+      "id": "worker-2",
+      "agent": "executor",
+      "status": "pending"
+    }
+  ],
+  "current_phase": "failed",
+  "stage_history": [
+    "initializing",
+    "executing",
+    "failed"
+  ]
+}
