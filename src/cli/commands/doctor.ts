@@ -247,7 +247,25 @@ export function runDoctor(): CheckResult[] {
     });
   }
 
-  // 10. Stale hook commands — detect entries in ~/.copilot/settings.json
+  // 10. MCP config integrity — parse ~/.copilot/mcp-config.json and check for
+  // missing server script files, non-executable command paths, and malformed JSON.
+  // US-1.9-T2-DOCTOR-check-mcp-config (Invariant 8: CLI registration).
+  try {
+    const probe = probeMcpConfigIntegrity(paths.copilotMcpConfig);
+    checks.push({
+      name: "mcp-config integrity",
+      level: probe.level,
+      detail: probe.detail,
+    });
+  } catch (err) {
+    checks.push({
+      name: "mcp-config integrity",
+      level: "warn",
+      detail: `unable to probe: ${(err as Error).message}`,
+    });
+  }
+
+  // 11. Stale hook commands — detect entries in ~/.copilot/settings.json
   // that point to scripts that no longer exist on disk (the v1.4 RCA
   // scenario: scripts/omcp-hook-dispatch.cjs was deleted by L1.2 revert
   // but settings.json was never refreshed). v1.7 US-06 carry-forward
@@ -469,6 +487,113 @@ export function analyzeHookDeliveryFromLog(
     };
   }
   return { level: "ok", detail: `latest log clean (${filename})` };
+}
+
+/**
+ * Probe ~/.copilot/mcp-config.json for integrity issues.
+ *
+ * Checks:
+ *   1. Malformed JSON → error
+ *   2. Missing server script files (args[0] for node/npx commands) → error
+ *   3. Non-existent command path (when command is an absolute path) → warn
+ *
+ * US-1.9-T2-DOCTOR-check-mcp-config; Invariant 8: CLI registration.
+ */
+export function probeMcpConfigIntegrity(
+  mcpConfigPath: string,
+): { level: CheckLevel; detail: string } {
+  if (!existsSync(mcpConfigPath)) {
+    return { level: "ok", detail: "no mcp-config.json present (run `omcp setup` to create)" };
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(mcpConfigPath, "utf8");
+  } catch (err) {
+    return { level: "warn", detail: `unable to read mcp-config.json: ${(err as Error).message}` };
+  }
+  return analyzeMcpConfigFromJson(raw, mcpConfigPath);
+}
+
+/**
+ * Pure analyzer for ~/.copilot/mcp-config.json content. Exported for testing.
+ *
+ * For each server entry, checks:
+ *   - args[0] (when command is "node" or "npx") must be an existing file
+ *   - command (when absolute path) must exist on disk
+ */
+export function analyzeMcpConfigFromJson(
+  jsonContent: string,
+  mcpConfigPath: string,
+): { level: CheckLevel; detail: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonContent);
+  } catch {
+    return {
+      level: "fail",
+      detail: `mcp-config.json at ${mcpConfigPath} is not valid JSON; run \`omcp setup\` to rewrite.`,
+    };
+  }
+
+  const root = parsed as { mcpServers?: Record<string, unknown> };
+  if (!root.mcpServers || typeof root.mcpServers !== "object") {
+    return { level: "ok", detail: "mcp-config.json present but has no mcpServers entries" };
+  }
+
+  const missingScripts: string[] = [];
+  const missingCommands: string[] = [];
+  const serverNames = Object.keys(root.mcpServers);
+
+  for (const [name, entry] of Object.entries(root.mcpServers)) {
+    const server = entry as { command?: string; args?: string[]; url?: string };
+    if (!server || typeof server !== "object") continue;
+
+    // Check script file referenced in args[0] for node/npx launchers
+    const cmd = server.command ?? "";
+    const isNodeLauncher =
+      cmd === "node" ||
+      cmd === "npx" ||
+      /[/\\]node(?:\.exe)?$/.test(cmd) ||
+      /[/\\]npx(?:\.exe)?$/.test(cmd);
+
+    if (isNodeLauncher && Array.isArray(server.args) && server.args.length > 0) {
+      const scriptPath = server.args[0];
+      if (scriptPath && !scriptPath.startsWith("${") && !existsSync(scriptPath)) {
+        missingScripts.push(`${name}:${scriptPath.split(/[\\/]/).pop() ?? scriptPath}`);
+      }
+    }
+
+    // Check absolute command path exists
+    if (cmd && /^[/\\]|^[A-Za-z]:/.test(cmd) && !existsSync(cmd)) {
+      missingCommands.push(`${name}:${cmd.split(/[\\/]/).pop() ?? cmd}`);
+    }
+  }
+
+  const total = serverNames.length;
+
+  if (missingScripts.length > 0) {
+    const sample = missingScripts.slice(0, 3).join(", ");
+    return {
+      level: "fail",
+      detail:
+        `${missingScripts.length}/${total} mcp server(s) reference missing script files ` +
+        `(${sample}${missingScripts.length > 3 ? ", ..." : ""}). Run \`omcp setup\` to refresh.`,
+    };
+  }
+  if (missingCommands.length > 0) {
+    const sample = missingCommands.slice(0, 3).join(", ");
+    return {
+      level: "warn",
+      detail:
+        `${missingCommands.length}/${total} mcp server(s) have non-existent command paths ` +
+        `(${sample}${missingCommands.length > 3 ? ", ..." : ""}). Run \`omcp setup\` to refresh.`,
+    };
+  }
+
+  return {
+    level: "ok",
+    detail: `${total} mcp server(s) verified — all paths present`,
+  };
 }
 
 export function formatChecks(checks: CheckResult[]): string {
