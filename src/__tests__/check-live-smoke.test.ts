@@ -56,11 +56,11 @@ function writeDetArtifact(phase: 1 | 3 | 4): void {
 }
 
 describe("checkLiveSmoke — gate enforcement", () => {
-  it("BLOCKED when zero artifacts exist (all 3 missing)", () => {
+  it("BLOCKED when zero artifacts exist (all 4 missing — P1/P3/P4/IPC)", () => {
     const result = checkLiveSmoke({ cwd: tmp });
     expect(result.liveCount).toBe(0);
     expect(result.tagGateSatisfied).toBe(false);
-    expect(result.missingCount).toBe(3);
+    expect(result.missingCount).toBe(4);
   });
 
   it("BLOCKED when only deterministic artifacts exist", () => {
@@ -166,11 +166,11 @@ describe("formatLiveSmokeReport", () => {
     expect(report).toMatch(/tag-gate: SATISFIED/);
   });
 
-  it("BLOCKED report includes the canonical 'capture P1, P3, or P4' message", () => {
+  it("BLOCKED report includes the canonical 'capture P1, P3, P4, or IPC' message", () => {
     writeDetArtifact(1);
     const result = checkLiveSmoke({ cwd: tmp });
     const report = formatLiveSmokeReport(result);
     expect(report).toContain("BLOCKED");
-    expect(report).toContain("capture P1, P3, or P4");
+    expect(report).toContain("capture P1, P3, P4, or IPC");
   });
 });

@@ -25,8 +25,8 @@ export const LIVE_MODE_MARKER = "**Mode**: live (real Copilot CLI)";
 export interface SmokeArtifactStatus {
   /** Relative path under cwd. */
   path: string;
-  /** Phase identifier (1 / 3 / 4). */
-  phase: 1 | 3 | 4;
+  /** Phase identifier (1 / 3 / 4 / 'ipc'). */
+  phase: 1 | 3 | 4 | "ipc";
   /**
    * "live" — file exists and contains the live-mode marker.
    * "deterministic" — file exists but is the deterministic-attestation.
@@ -45,7 +45,7 @@ export interface CheckLiveSmokeResult {
 }
 
 interface SmokeFileSpec {
-  phase: 1 | 3 | 4;
+  phase: 1 | 3 | 4 | "ipc";
   live: string;
   deterministic: string;
 }
@@ -68,6 +68,12 @@ const SMOKE_PATHS: readonly SmokeFileSpec[] = [
     live: "docs/smoke/omcp-team-parity/phase4-integration.md",
     deterministic:
       "docs/smoke/omcp-team-parity/phase4-integration-deterministic-attestation.md",
+  },
+  {
+    phase: "ipc",
+    live: "docs/smoke/omcp-team-parity/ipc-mesh.md",
+    deterministic:
+      "docs/smoke/omcp-team-parity/ipc-mesh-deterministic-attestation.md",
   },
 ];
 
@@ -147,7 +153,7 @@ export function formatLiveSmokeReport(result: CheckLiveSmokeResult): string {
     );
   } else {
     lines.push(
-      `  tag-gate: BLOCKED — v2.1.0 LOCAL tag blocked: ≥1 live-smoke required — capture P1, P3, or P4 with real Copilot CLI auth`,
+      `  tag-gate: BLOCKED — v2.x LOCAL tag blocked: ≥1 live-smoke required — capture P1, P3, P4, or IPC with real Copilot CLI auth`,
     );
   }
   return lines.join("\n");
