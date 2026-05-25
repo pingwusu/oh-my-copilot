@@ -32,6 +32,7 @@ import {
   clearModeState,
   MODE_CONFIGS,
   readModeState,
+  writeModeState,
   type BaseModeState,
   type ModeName,
 } from "../../runtime/mode-state.js";
@@ -545,4 +546,117 @@ function readGenericModeState(
 
 function clearGenericModeState(mode: ModeName, sessionId?: string): void {
   clearModeState(mode, sessionId);
+}
+
+// ─── Story 12: cancel propagation across chain steps ──────────────────────────
+
+/** Subset of ModeName for the "current step verb → mode-state" mapping. */
+const CHAIN_STEP_VERB_TO_MODE: Readonly<Record<string, ModeName>> = {
+  ralph: "ralph",
+  autopilot: "autopilot",
+  ultrawork: "ultrawork",
+  ultraqa: "ultraqa",
+  sciomc: "sciomc",
+  ralplan: "ralplan",
+  ultragoal: "ultragoal",
+  team: "team",
+};
+
+export interface PropagateCancelToChainOpts {
+  cwd?: string;
+  /** Test hook: timestamp source. */
+  now?: () => string;
+}
+
+export interface PropagateCancelToChainResult {
+  /**
+   * True when chain-state.json was present AND its status was non-terminal
+   * (running / handing-off-to-*). Drives whether the propagation actually
+   * fired vs short-circuiting.
+   */
+  chainWasActive: boolean;
+  /**
+   * True iff the current step's mode-state was successfully marked with
+   * `cancelled: true`. Requires:
+   *   - chain was active
+   *   - the current step's verb maps to a known ModeName
+   *   - the on-disk mode-state file exists for that mode
+   * Per the ADR, ralph + team-verify check the cancelled flag at their
+   * checkpoints; team-launch's workers ignore it (SIGTERM via stopTeam).
+   */
+  modeStateSignalled: boolean;
+  /** Verb of the chain step that was in flight at cancel time. */
+  currentStepVerb?: string;
+  /** True iff chain-state.json was cleared as part of propagation. */
+  chainStateCleared: boolean;
+}
+
+/**
+ * Story 12 chain-aware cancel propagation. When chain-state.json exists and
+ * is in a non-terminal status, this function:
+ *   1. Reads the current step (`chainState.currentStep`).
+ *   2. Maps the step's verb to a ModeName via CHAIN_STEP_VERB_TO_MODE.
+ *   3. Reads the corresponding mode-state file (if any), sets
+ *      `cancelled: true`, and writes it back via writeModeState (atomic).
+ *   4. Clears chain-state.json so subsequent `omcp status` does not show
+ *      a stale "running" chain.
+ *
+ * The cancel-marker file (.omcp/state/cancel.json) is written by the
+ * existing runCancel helper in mode.ts — NOT by this function. The CLI
+ * layer composes both: runCancel writes the marker, propagateCancelToChain
+ * fans out into chain + mode states. This keeps the boundary clean and
+ * preserves "one writer per file" semantics.
+ *
+ * Idempotent: a second call when chain-state.json has already been cleared
+ * reports `chainWasActive: false` with no further side effects.
+ */
+export function propagateCancelToChain(
+  opts: PropagateCancelToChainOpts = {},
+): PropagateCancelToChainResult {
+  const cwd = opts.cwd ?? process.cwd();
+  const chainState = readChainState(cwd);
+  const isActive =
+    chainState !== undefined &&
+    chainState.status !== "completed" &&
+    chainState.status !== "failed" &&
+    chainState.status !== "cancelled";
+  if (!isActive) {
+    return {
+      chainWasActive: false,
+      modeStateSignalled: false,
+      chainStateCleared: false,
+    };
+  }
+  const currentIdx = chainState.currentStep - 1;
+  const currentStep =
+    currentIdx >= 0 && currentIdx < chainState.steps.length
+      ? chainState.steps[currentIdx]
+      : undefined;
+  const currentStepVerb = currentStep?.verb;
+  let modeStateSignalled = false;
+  if (currentStepVerb !== undefined) {
+    const mode = CHAIN_STEP_VERB_TO_MODE[currentStepVerb];
+    if (mode !== undefined) {
+      try {
+        const state = readModeState<BaseModeState>(mode);
+        if (state !== null) {
+          writeModeState<BaseModeState & { cancelled?: boolean }>(mode, {
+            ...state,
+            cancelled: true,
+          });
+          modeStateSignalled = true;
+        }
+      } catch {
+        // best-effort — the cancel marker itself is the load-bearing
+        // signal; mode-state propagation is an optimization.
+      }
+    }
+  }
+  clearChainState(cwd);
+  return {
+    chainWasActive: true,
+    modeStateSignalled,
+    currentStepVerb,
+    chainStateCleared: true,
+  };
 }

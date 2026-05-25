@@ -60,6 +60,7 @@ import {
 import {
   ChainParseError,
   parseChainSpec,
+  propagateCancelToChain,
   type ChainStep,
 } from "./commands/chain.js";
 import {
@@ -563,11 +564,25 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("cancel")
-    .description("Write a cancel marker that omcp loops/skills check on each iteration")
+    .description(
+      "Write a cancel marker that omcp loops/skills check on each iteration. v2.1 N+2: when chain-state.json is active, also clears the chain marker and signals the current step's mode-state.cancelled=true.",
+    )
     .option("--reason <reason>", "free-form reason text")
     .action((opts: { reason?: string }) => {
       const report = runCancel(opts.reason);
       console.log(`omcp cancel: wrote ${report.path}`);
+      // v2.1 N+2 Story 12: chain-aware propagation. Auto-detects an active
+      // chain-state.json and fans the cancel signal into the chain marker
+      // + the current step's mode-state. The cancel marker itself is
+      // written above by runCancel; this call only extends the side-
+      // effects when there's a chain context.
+      const chain = propagateCancelToChain();
+      if (chain.chainWasActive) {
+        console.log(`omcp cancel: chain was active — propagation applied:`);
+        console.log(`  current step verb:    ${chain.currentStepVerb ?? "(unknown)"}`);
+        console.log(`  mode-state signalled: ${chain.modeStateSignalled}`);
+        console.log(`  chain-state cleared:  ${chain.chainStateCleared}`);
+      }
     });
 
   program
