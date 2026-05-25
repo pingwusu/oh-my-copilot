@@ -31,6 +31,7 @@ import {
 } from "../../runtime/safe-slug.js";
 import { spawnCrossPlatform } from "../../runtime/resolve-executable.js";
 import {
+  InvalidPhaseTransitionError,
   readModeState,
   transitionPhase,
   writeModeState,
@@ -554,13 +555,18 @@ export function spawnFixWorker(opts: SpawnFixWorkerOpts): SpawnFixWorkerResult {
     );
   }
 
-  // Story 5 bound check. resolveMaxLoops ranks env > opts > default; we feed
-  // in the verifyReport.max_fix_loops as the "opts" tier so a session that
-  // ran with a custom --max-loops in the verify pass carries that value
-  // forward into the bound check at fix-spawn time.
+  // Story 5 bound check. Precedence (single source of truth — matches
+  // runTeamCollect's resolveMaxFixLoops):
+  //   env OMCP_TEAM_MAX_FIX_LOOPS > verifyReport.max_fix_loops > opts.maxLoops
+  //   > DEFAULT_MAX_LOOPS.
+  // The report is authoritative because team-verify already baked the
+  // operator's --max-loops choice into it; an `opts.maxLoops` here exists
+  // only as a test-injection seam and never overrides a report value.
+  // This eliminates the resolver-drift bug surfaced by critic review where
+  // `omcp team-fix --max-loops N` could disagree with the collect gate.
   const previousCount = state.fix_loop_count ?? 0;
   const maxFixLoops = resolveMaxLoops(
-    opts.maxLoops ?? verifyReport?.max_fix_loops,
+    verifyReport?.max_fix_loops ?? opts.maxLoops,
   );
   if (previousCount >= maxFixLoops) {
     // Loop exhausted — transition to failed and skip the spawn. Defense-in-
@@ -573,9 +579,11 @@ export function spawnFixWorker(opts: SpawnFixWorkerOpts): SpawnFixWorkerResult {
         "failed",
         `verify_loop_exhausted (${previousCount}/${maxFixLoops})`,
       );
-    } catch {
-      // Already terminal (failed → failed is invalid transition) — that's
-      // fine; the bound semantic still holds (no spawn).
+    } catch (err) {
+      // Already terminal (failed → failed is an invalid transition) — bound
+      // semantic still holds (no spawn). Anything else (e.g., disk I/O) we
+      // re-throw so the caller knows the state-write failed.
+      if (!(err instanceof InvalidPhaseTransitionError)) throw err;
     }
     return {
       fixWorkerIndex: -1,
