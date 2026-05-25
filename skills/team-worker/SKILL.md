@@ -24,13 +24,28 @@ this document entirely.
 1. **Claim**: Check the `/tasks` board for tasks assigned to your worker name
    (`worker-$OMCP_TEAM_WORKER_INDEX`). Pick the first `pending` task assigned
    to you and mark it `in_progress`. You SHOULD also signal the corresponding
-   TeamState status:
+   TeamState status AND write a heartbeat:
    ```
    omcp team-ack $OMCP_TEAM_SESSION_ID $OMCP_TEAM_WORKER_INDEX --status in_progress
+   omcp team-heartbeat $OMCP_TEAM_SESSION_ID $OMCP_TEAM_WORKER_INDEX
    ```
-   This is non-load-bearing — `team-collect` does not consult worker status
-   for the verify/fix loop — but it makes `omcp status` and chain handoff
-   snapshots accurately reflect work-in-progress for postmortem readers.
+   The ack is non-load-bearing for the verify/fix loop. The heartbeat IS the
+   primary liveness signal (v2.2 EB-06 Phase 2 IPC mesh per ADR-EB-05).
+   `runTeamWatchdog` reads `worker-<idx>-heartbeat.json`'s `ts` field as the
+   freshness signal; default threshold = 30s interval × 3 = 90s. If you skip
+   the heartbeat, the watchdog falls back to shard-mtime (back-compat) but
+   surfaces a `[watchdog] worker-N not heartbeating` warning after 2× interval.
+
+   **Heartbeat cadence**: call `omcp team-heartbeat` once at task start +
+   between major checkpoints. Do NOT heartbeat in a hot loop (each call is
+   a subprocess spawn).
+
+   **Inbox check**: poll for leader messages via:
+   ```
+   omcp team-outbox-read $OMCP_TEAM_SESSION_ID worker-$OMCP_TEAM_WORKER_INDEX --json
+   ```
+   The cursor advances per-consumer so each worker has its own independent
+   read pointer. Use `--json` for machine-readable parsing inside scripts.
 
 2. **Work**: Execute the task using available file and shell tools.
    Do not spawn sub-agents or delegate. Work directly.
@@ -56,7 +71,19 @@ When the file exists:
 
 1. Finish any work that is safe to stop at — do not leave a task half-written
    or a file in an inconsistent state.
-2. Run the ack-with-status command appropriate to your final state:
+2. Write a completion message to the outbox so consumers (chain runner,
+   verify-collect loop, ralph monitor) see your final result:
+   ```
+   omcp team-outbox-write $OMCP_TEAM_SESSION_ID worker-$OMCP_TEAM_WORKER_INDEX \
+     "$(cat <<'JSON'
+   {"event":"task_completed","tasks_completed":N,"final_status":"completed"}
+   JSON
+   )"
+   ```
+   Outbox writes share a hand-rolled lockfile so concurrent worker writes
+   serialize safely (per ADR-omcp-eb-02). Lines are capped at 64KB; the
+   helper truncates oversized payloads with a `truncated:true` marker.
+3. Run the ack-with-status command appropriate to your final state:
    - **Work completed successfully** before shutdown was requested:
      ```
      omcp team-ack $OMCP_TEAM_SESSION_ID $OMCP_TEAM_WORKER_INDEX --status completed
@@ -96,3 +123,25 @@ postmortem inspection.
 - Always use absolute file paths
 - Always report progress to `team-lead` via messages
 - Never fabricate `request_id` values in shutdown responses
+
+## v2.2 IPC anti-patterns (EB-06)
+
+- **Do NOT heartbeat in a hot loop.** Each `omcp team-heartbeat` call spawns
+  a Node subprocess (~50ms). Calling it more than once per ~10s per worker
+  is wasteful — the default 30s interval × 3 freshness threshold (90s)
+  gives plenty of headroom.
+- **Do NOT outbox-write inside the verify-fix inner loop without
+  rate-limiting.** A worker that emits an outbox entry per fix attempt
+  during a runaway loop can saturate the per-session lockfile with
+  4+ second backoff exhaustion windows. Cap outbox-write frequency at
+  ~1 per task completion / ~1 per major checkpoint.
+- **Do NOT consume the outbox cursor as `worker-K-foo` then ALSO as
+  `worker-K-bar` from a different process.** Cursors are per-consumer;
+  use one consumer name per logical reader so the cursor advances
+  consistently.
+- **Do NOT exceed 64KB per outbox line.** The helper truncates oversized
+  payloads, but consumers parsing the truncated string get a `payload`
+  field that won't round-trip as the original JSON. If you need to ship
+  a large object, write a sentinel pointer to a file under
+  `.omcp/state/team/<sid>/` instead and reference its path in the
+  outbox entry.
