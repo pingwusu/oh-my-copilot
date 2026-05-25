@@ -20,6 +20,22 @@
 //
 // Empty spec ("") → no steps → caller falls back to legacy ralplan behavior.
 
+import {
+  existsSync as fsExistsSync,
+  mkdirSync as fsMkdirSync,
+  readFileSync as fsReadFileSync,
+  rmSync as fsRmSync,
+} from "node:fs";
+import { dirname as pathDirname, join as pathJoin } from "node:path";
+import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
+import {
+  clearModeState,
+  MODE_CONFIGS,
+  readModeState,
+  type BaseModeState,
+  type ModeName,
+} from "../../runtime/mode-state.js";
+
 const THEN_MARKER = "--then";
 
 export interface ChainStep {
@@ -116,16 +132,20 @@ export function parseChainSpec(spec: string): ChainStep[] {
 
 // ─── Story 9: sequential runner + chain-state.json marker ─────────────────────
 
-import {
-  existsSync as fsExistsSync,
-  mkdirSync as fsMkdirSync,
-  readFileSync as fsReadFileSync,
-  rmSync as fsRmSync,
-} from "node:fs";
-import { dirname as pathDirname, join as pathJoin } from "node:path";
-import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
-
-export type ChainStatus = "running" | "completed" | "failed" | "cancelled";
+/**
+ * Lifecycle status carried on the chain-state.json marker.
+ *
+ * The four terminal-ish values describe the chain as a whole; the dynamic
+ * `handing-off-to-<mode>` value is set by Story 10's prepareTransition
+ * between steps and signals that the from-mode state has been snapshotted
+ * and the to-mode is about to spawn.
+ */
+export type ChainStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | `handing-off-to-${ModeName}`;
 
 export interface ChainState {
   /** 1-based index of the current step (or the failed step when failed). */
@@ -307,4 +327,222 @@ export function runChain(opts: RunChainOpts): RunChainResult {
   };
   writeChainState(completedState, cwd);
   return { exitCode: aggregateExit, state: completedState };
+}
+
+// ─── Story 10: prepareTransition — 5-step atomic state handoff ────────────────
+//
+// Per iter-2 plan H3 + Architect #2: a deterministic 5-step sequence runs
+// between consecutive chain steps to carry from-mode state safely into the
+// to-mode without leaving torn / orphaned files even under kill -9.
+//
+//   1. Read from-mode's state file (e.g., team-state.json).
+//   2. Write snapshot to .omcp/state/chain-handoffs/<step-N>.json (atomic).
+//   3. Write chain-state.json marker (atomic) with status='handing-off-to-<toMode>'.
+//   4. Clear from-mode state — ASYMMETRIC: ONLY when to-mode is
+//      mutuallyExclusive=true (currently ralph / autopilot / ultrawork /
+//      ultraqa / ultragoal). Non-exclusive to-modes (team / ralplan / sciomc)
+//      skip the clear so the from-mode state coexists with the to-mode state.
+//   5. Spawn to-mode (caller-supplied via opts.spawnToMode).
+//
+// Crash-resume contract: at every point between steps 2 and 5 inclusive, the
+// on-disk file set is sufficient for postmortem to identify what step was
+// in flight (chain-state.json carries currentStep + status; the
+// chain-handoffs/<step-N>.json snapshot preserves the from-mode state for
+// inspection).
+
+export interface PrepareTransitionOpts {
+  fromMode: ModeName;
+  toMode: ModeName;
+  /** 1-based step index of the transition (matches ChainState.currentStep). */
+  stepN: number;
+  /** Optional pre-computed ChainState payload for chain-state.json. */
+  chainStateOverlay?: Pick<
+    ChainState,
+    "currentStep" | "totalSteps" | "completedSteps" | "steps"
+  >;
+  /** Test hook: timestamp source. */
+  now?: () => string;
+  /**
+   * Test hook: the actual spawn-to-mode action. The caller is responsible for
+   * launching the next mode (e.g., runMode / runTeam). Returns the spawn's
+   * exit code. The 5-step sequence runs AROUND this call so a kill -9 inside
+   * the spawn does not invalidate the on-disk resume signal.
+   */
+  spawnToMode: (toMode: ModeName, stepN: number, cwd: string) => number;
+  /** Override cwd (test hook). */
+  cwd?: string;
+  /**
+   * Inject a sessionId for the from-mode state read. When omitted, the
+   * default `resolveSessionRoot()` lookup is used by readModeState — which
+   * matches the runtime behavior.
+   */
+  fromSessionId?: string;
+}
+
+export interface PrepareTransitionResult {
+  /** 1-based step index this transition served. */
+  stepN: number;
+  /** Path of the chain-handoffs/<step-N>.json snapshot. */
+  handoffPath: string;
+  /** Whether the from-mode state file was cleared (step 4). */
+  clearedFromMode: boolean;
+  /** Whether to-mode is mutually-exclusive (drives step 4 asymmetry). */
+  toModeIsExclusive: boolean;
+  /** Exit code returned by opts.spawnToMode (step 5). */
+  spawnExitCode: number;
+}
+
+/** Path to the chain-handoffs/<step-N>.json snapshot. */
+export function chainHandoffSnapshotPath(stepN: number, cwd: string): string {
+  return pathJoin(
+    cwd,
+    ".omcp",
+    "state",
+    "chain-handoffs",
+    `step-${stepN}.json`,
+  );
+}
+
+/**
+ * Read the snapshot of `fromMode`'s state at the given chain step. Used by
+ * Story 11's chain-handoff-reader.ts to surface Phase 1 TeamState fields
+ * (fix_loop_count etc.) into a subsequent ralph step's postmortem context.
+ * Returns undefined when absent or unparseable.
+ */
+export function readChainHandoffSnapshot(
+  stepN: number,
+  cwd: string,
+): unknown | undefined {
+  const p = chainHandoffSnapshotPath(stepN, cwd);
+  if (!fsExistsSync(p)) return undefined;
+  try {
+    return JSON.parse(fsReadFileSync(p, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Execute the canonical 5-step handoff sequence. Returns the spawn's exit
+ * code along with metadata describing what side-effects landed. Throws
+ * only if a critical write fails (caller decides how to recover — typically
+ * by leaving the chain-state.json marker in place and exiting non-zero so
+ * the next `omcp status` surfaces the partial state).
+ */
+export function prepareTransition(
+  opts: PrepareTransitionOpts,
+): PrepareTransitionResult {
+  const cwd = opts.cwd ?? process.cwd();
+  const now = opts.now ?? (() => new Date().toISOString());
+  const toModeIsExclusive = MODE_CONFIGS[opts.toMode].mutuallyExclusive;
+
+  // Step 1 — read from-mode's on-disk state. readModeState resolves the
+  // generic path (.omcp/state/<mode>-state.json or session-scoped). When
+  // no state exists (e.g., the from-mode never ran), the snapshot below
+  // simply records `fromState: null` so postmortem can distinguish
+  // "from-mode never ran" from "from-mode ran but file went missing".
+  const fromState = readGenericModeState(opts.fromMode, opts.fromSessionId);
+
+  // Step 2 — write the chain-handoffs/<step-N>.json snapshot atomically.
+  // Snapshot shape includes the chain-step metadata so a postmortem reader
+  // doesn't need to cross-reference chain-state.json.
+  const handoffPath = chainHandoffSnapshotPath(opts.stepN, cwd);
+  fsMkdirSync(pathDirname(handoffPath), { recursive: true });
+  atomicWriteFileSync(
+    handoffPath,
+    JSON.stringify(
+      {
+        stepN: opts.stepN,
+        fromMode: opts.fromMode,
+        toMode: opts.toMode,
+        toModeIsExclusive,
+        ts: now(),
+        fromState,
+      },
+      null,
+      2,
+    ),
+  );
+
+  // Step 3 — update chain-state.json with status='handing-off-to-<toMode>'.
+  // Uses chainStateOverlay when caller supplies it (running chain context);
+  // else best-effort merges into any pre-existing marker, falling back to a
+  // minimal record.
+  const baseline =
+    readChainState(cwd) ??
+    ({
+      currentStep: opts.stepN,
+      totalSteps: opts.stepN,
+      completedSteps: [],
+      ts: now(),
+      status: "running",
+      steps: [],
+    } satisfies ChainState);
+  const overlay = opts.chainStateOverlay ?? {
+    currentStep: opts.stepN,
+    totalSteps: baseline.totalSteps,
+    completedSteps: baseline.completedSteps,
+    steps: baseline.steps,
+  };
+  const handoffState: ChainState = {
+    currentStep: overlay.currentStep,
+    totalSteps: overlay.totalSteps,
+    completedSteps: overlay.completedSteps,
+    ts: now(),
+    status: "running",
+    steps: overlay.steps,
+  };
+  // We persist the "handing-off-to-..." semantic in the chain-state.json
+  // via a dedicated transitional status string outside the ChainStatus enum
+  // — kept under the same `status` key so existing readers parse it.
+  const handoffMarker = {
+    ...handoffState,
+    status: `handing-off-to-${opts.toMode}` as ChainStatus,
+  } as ChainState;
+  writeChainState(handoffMarker, cwd);
+
+  // Step 4 — clear from-mode state ASYMMETRICALLY. Per critic S2 + iter-2
+  // plan H3: the clear runs ONLY when to-mode is mutuallyExclusive=true so
+  // the next exclusive mode can take over without colliding with the
+  // previous mode's state file. Non-exclusive to-modes leave the from-mode
+  // state in place (existing v1.3 behavior).
+  let clearedFromMode = false;
+  if (toModeIsExclusive) {
+    try {
+      clearGenericModeState(opts.fromMode, opts.fromSessionId);
+      clearedFromMode = true;
+    } catch {
+      // best-effort — if rmSync fails the snapshot already preserves the
+      // state, so postmortem is unaffected.
+    }
+  }
+
+  // Step 5 — spawn the to-mode via the injected callback.
+  const spawnExitCode = opts.spawnToMode(opts.toMode, opts.stepN, cwd);
+
+  return {
+    stepN: opts.stepN,
+    handoffPath,
+    clearedFromMode,
+    toModeIsExclusive,
+    spawnExitCode,
+  };
+}
+
+/**
+ * Wrapper around readModeState that accepts an arbitrary ModeName + optional
+ * session id. Returns null when the state file is absent. readModeState is
+ * generic on T extending BaseModeState; we use BaseModeState here because
+ * the handoff snapshot is read-only-for-postmortem and simply preserves
+ * whatever shape was on disk.
+ */
+function readGenericModeState(
+  mode: ModeName,
+  sessionId?: string,
+): unknown | null {
+  return readModeState<BaseModeState>(mode, sessionId);
+}
+
+function clearGenericModeState(mode: ModeName, sessionId?: string): void {
+  clearModeState(mode, sessionId);
 }
