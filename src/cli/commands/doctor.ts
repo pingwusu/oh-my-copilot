@@ -322,18 +322,18 @@ export function runDoctor(): CheckResult[] {
     });
   }
 
-  // 14. Agent catalog — verify all agents/*.md files are registered in the
-  // agent catalog. US-1.9-T2-DOCTOR-check-agent-catalog (Invariant 8).
+  // 14. Agent catalog count — verify all 19 agents/*.md are present in the
+  // plugin cache. US-1.9-T2-DOCTOR-check-agent-catalog (Invariant 8).
   try {
     const probe = probeAgentCatalog(paths.omcpPluginDir);
     checks.push({
-      name: "agent catalog",
+      name: "agent catalog (count)",
       level: probe.level,
       detail: probe.detail,
     });
   } catch (err) {
     checks.push({
-      name: "agent catalog",
+      name: "agent catalog (count)",
       level: "warn",
       detail: `unable to probe: ${(err as Error).message}`,
     });

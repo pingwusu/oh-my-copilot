@@ -156,18 +156,15 @@ describe("runDoctor: agent catalog check wired", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("runDoctor surfaces 'agent catalog' check (absent plugin dir → warn)", () => {
+  it("runDoctor surfaces 'agent catalog (count)' check (absent plugin dir → warn)", () => {
     const checks = runDoctor();
-    // There are two checks named "agent catalog" — the tier-1 existence check
-    // and the tier-2 full-count check (probeAgentCatalog). Find the one from probeAgentCatalog.
-    const catalogChecks = checks.filter((c) => c.name === "agent catalog");
-    expect(catalogChecks.length).toBeGreaterThanOrEqual(1);
-    // With no plugin dir, at least one should be warn
-    const hasWarn = catalogChecks.some((c) => c.level === "warn");
-    expect(hasWarn).toBe(true);
+    const check = checks.find((c) => c.name === "agent catalog (count)");
+    expect(check).toBeDefined();
+    // With no plugin dir, should be warn
+    expect(check!.level).toBe("warn");
   });
 
-  it("runDoctor surfaces 'agent catalog' ok when all 19 agents present", () => {
+  it("runDoctor surfaces 'agent catalog (count)' ok when all 19 agents present", () => {
     const pluginDir = join(
       tmp,
       "installed-plugins",
@@ -184,9 +181,8 @@ describe("runDoctor: agent catalog check wired", () => {
     );
     for (const f of ALL_19_AGENTS) writeFileSync(join(agentsDir, f), `# ${f}`);
     const checks = runDoctor();
-    const catalogChecks = checks.filter((c) => c.name === "agent catalog");
-    // The probeAgentCatalog check should be ok
-    const okCheck = catalogChecks.find((c) => c.level === "ok");
-    expect(okCheck).toBeDefined();
+    const check = checks.find((c) => c.name === "agent catalog (count)");
+    expect(check).toBeDefined();
+    expect(check!.level).toBe("ok");
   });
 });
