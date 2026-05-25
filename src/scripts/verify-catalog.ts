@@ -187,6 +187,45 @@ function statSyncSafe(p: string): ReturnType<typeof statSync> | null {
   }
 }
 
+/**
+ * Drift guard: compare agents/ filesystem against a catalog manifest.
+ * Returns findings for:
+ *   - agent file in agentsDir but name missing from catalogNames (filesystem drift)
+ *   - name in catalogNames but no corresponding .md in agentsDir (manifest drift)
+ *
+ * Invariant 3 (4-manifest sync): any addition to agents/ must be reflected in the
+ * catalog manifest and vice-versa.
+ */
+export function checkAgentDrift(agentsDir: string, catalogNames: Set<string>): Finding[] {
+  const findings: Finding[] = [];
+  // Collect filesystem agent slugs
+  const fsNames = new Set<string>();
+  if (statSyncSafe(agentsDir)) {
+    for (const f of readdirSync(agentsDir)) {
+      if (f.endsWith(".md")) fsNames.add(f.replace(/\.md$/, ""));
+    }
+  }
+  // filesystem agent missing from catalog
+  for (const name of fsNames) {
+    if (!catalogNames.has(name)) {
+      findings.push({
+        file: join(agentsDir, `${name}.md`),
+        issue: `agent file exists in agents/ but is missing from catalog manifest (drift)`,
+      });
+    }
+  }
+  // catalog entry missing from filesystem
+  for (const name of catalogNames) {
+    if (!fsNames.has(name)) {
+      findings.push({
+        file: join(agentsDir, `${name}.md`),
+        issue: `agent name "${name}" is in catalog manifest but has no agents/${name}.md (drift)`,
+      });
+    }
+  }
+  return findings;
+}
+
 export function runVerify(): Finding[] {
   const findings: Finding[] = [];
   for (const a of collectAgents()) findings.push(...checkFile(a.file, a.name));
