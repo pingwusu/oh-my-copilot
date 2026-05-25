@@ -124,6 +124,62 @@ By default, ralph operates in PRD mode. A scaffold `prd.json` is auto-generated 
 - Skip architect consultation for simple feature additions, well-tested changes, or time-critical verification
 - Proceed with architect agent verification alone -- never block on unavailable tools
 - Use the omcp mode MCP tools (`mode_write` / `mode_read`) for ralph mode state persistence between iterations
+
+## Parallel subtask dispatch via team (v2.1 N+2 Story 14)
+
+When the current PRD iteration identifies **≥3 independent user stories that
+do not share files**, you SHOULD dispatch them to a sub-team in parallel
+rather than running them sequentially through `/fleet`. Then block on the
+sub-team's completion via `omcp team-wait` before continuing the iteration.
+
+### Decision criteria
+
+**Use team dispatch** (`omcp team N:executor "..."`) when ALL of the following hold:
+
+- 3 or more pending PRD stories with `passes: false` are independent (no
+  story depends on another's output landing first)
+- The stories touch **disjoint file sets** — no two stories edit the same
+  file. Grep the PRD's acceptance-criteria field paths to verify.
+- Each story is well-bounded enough for a single Copilot worker to complete
+  in a single spawn (no inner ralph loop required).
+- The current task is not itself part of a chain (`chain-state.json` exists)
+  — when chained, the outer chain orchestrator is responsible for
+  parallel decomposition.
+
+**Use ralph alone** (default `/fleet` executor dispatch) when ANY of the following hold:
+
+- Stories edit the **same file** — sequential execution avoids merge
+  conflicts and team-collect's `fixing` transition cost
+- Stories form a dependency chain (story B reads what story A writes)
+- The iteration has only 1-2 pending stories — team-spawn overhead exceeds
+  the parallelism win
+- A previous team-collect transitioned to `fixing` and the verify-fail
+  signals are still active for this session — finish the fix loop before
+  starting fresh parallel work
+
+### Dispatch protocol
+
+```text
+# 1. Identify the parallel-safe story batch — N stories that meet ALL "use team" criteria.
+omcp team N:executor "story N+1: <title>; story N+2: <title>; ... story N+M: <title>"
+# 2. Capture the printed sessionId from team-launch output.
+# 3. Block on terminal phase. Exit 0=completed, 1=failed, 2=timeout, 3=session-not-found.
+omcp team-wait <sessionId>
+# 4. Inspect TeamState + verify-fail-summary.json (if `fixing` ran), then mark
+#    the dispatched stories `passes: true` in prd.json after their acceptance
+#    criteria verify against the worker shards.
+```
+
+### Anti-patterns
+
+- **Do NOT** dispatch a sub-team if you have not run `omcp team-verify` after
+  the workers exit — verify-fail signals will be missed and the loop won't
+  self-correct. The verify-fix loop (US-omcp-parity-P1) is part of the
+  team contract; team-wait alone is insufficient evidence of success.
+- **Do NOT** dispatch the same story to both a sub-team AND a `/fleet`
+  executor — the duplicate work corrupts shard-merge.
+- **Do NOT** chain `omcp team-wait` inside a hot loop — its default
+  poll interval is 2s and timeout is 1800s; treat it as a one-shot block.
 </Tool_Usage>
 
 <Examples>
