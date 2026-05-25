@@ -53,7 +53,10 @@ import { formatStatus, readStatus } from "./commands/status.js";
 import { parseTeamSpec, runTeam, runTeamMergeShards, runTeamWatchdog } from "./commands/team.js";
 import { runTeamCollect } from "./commands/team-phase-controller.js";
 import { runTeamAckCli } from "./commands/team-ack.js";
-import { runTeamVerifyCli } from "./commands/team-verify.js";
+import {
+  runTeamFixCli,
+  runTeamVerifyCli,
+} from "./commands/team-verify.js";
 import {
   formatTeleportList,
   listTeleports,
@@ -325,6 +328,20 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     )
     .action((sessionId: string, opts: { maxLoops?: number }) => {
       process.exitCode = runTeamVerifyCli(sessionId, { maxLoops: opts.maxLoops });
+    });
+
+  program
+    .command("team-fix <session-id>")
+    .description(
+      "Spawn a debugger fix-worker for a team session with verify-fail signals (Phase 1 verify/fix loop). Refuses with exit 3 when fix_loop_count >= max_fix_loops.",
+    )
+    .option(
+      "--max-loops <n>",
+      "max fix-loop iterations (default 3; env OMCP_TEAM_MAX_FIX_LOOPS overrides; falls back to verify-report-N.json.max_fix_loops)",
+      (v) => Number(v),
+    )
+    .action((sessionId: string, opts: { maxLoops?: number }) => {
+      process.exitCode = runTeamFixCli(sessionId, { maxLoops: opts.maxLoops });
     });
 
   program

@@ -35,7 +35,9 @@ import {
 } from "../../../runtime/mode-state.js";
 import {
   buildFixingReason,
+  readLatestReportMaxLoops,
   readVerifyFailSignals,
+  resolveMaxFixLoops,
   runTeamCollect,
   type VerifyFailSignal,
 } from "../team-phase-controller.js";
@@ -950,6 +952,267 @@ describe("runTeamCollect v2.1 — back-compat with teamName omitted", () => {
     expect(report.finalPhase).toBe("fixing");
     expect(report.verifyFailSignals).toHaveLength(1);
     expect(fs.existsSync(path.join(pidDir, "verify-fail-summary.json"))).toBe(true);
+  });
+});
+
+// ─── v2.1 Story 5: resolveMaxFixLoops + readLatestReportMaxLoops ──────────────
+
+describe("resolveMaxFixLoops (Story 5)", () => {
+  it("returns COLLECT_DEFAULT_MAX_LOOPS=3 when neither env nor report provided", () => {
+    expect(resolveMaxFixLoops(undefined, {})).toBe(3);
+  });
+
+  it("uses report value when env is unset", () => {
+    expect(resolveMaxFixLoops(5, {})).toBe(5);
+  });
+
+  it("env overrides report", () => {
+    expect(resolveMaxFixLoops(5, { OMCP_TEAM_MAX_FIX_LOOPS: "7" })).toBe(7);
+  });
+
+  it("ignores non-positive env and non-positive report values", () => {
+    expect(resolveMaxFixLoops(0, { OMCP_TEAM_MAX_FIX_LOOPS: "-1" })).toBe(3);
+    expect(resolveMaxFixLoops(-2, { OMCP_TEAM_MAX_FIX_LOOPS: "abc" })).toBe(3);
+  });
+
+  it("empty-string env falls through to report", () => {
+    expect(resolveMaxFixLoops(4, { OMCP_TEAM_MAX_FIX_LOOPS: "" })).toBe(4);
+  });
+});
+
+describe("readLatestReportMaxLoops (Story 5)", () => {
+  it("returns undefined when pidDir absent", () => {
+    expect(
+      readLatestReportMaxLoops(path.join(tmp, "no-such-dir")),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when no verify-report-N.json files present", () => {
+    const pidDir = path.join(tmp, "empty-pid-dir");
+    fs.mkdirSync(pidDir, { recursive: true });
+    expect(readLatestReportMaxLoops(pidDir)).toBeUndefined();
+  });
+
+  it("returns max_fix_loops from the highest-numbered report", () => {
+    const pidDir = path.join(tmp, "multi-report-pid-dir");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "verify-report-1.json"),
+      JSON.stringify({ iteration: 1, max_fix_loops: 5 }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pidDir, "verify-report-2.json"),
+      JSON.stringify({ iteration: 2, max_fix_loops: 9 }),
+      "utf8",
+    );
+    expect(readLatestReportMaxLoops(pidDir)).toBe(9);
+  });
+
+  it("returns undefined when report is corrupt JSON", () => {
+    const pidDir = path.join(tmp, "corrupt-report-pid-dir");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "verify-report-1.json"),
+      "{not valid",
+      "utf8",
+    );
+    expect(readLatestReportMaxLoops(pidDir)).toBeUndefined();
+  });
+
+  it("returns undefined when max_fix_loops field is missing or non-positive", () => {
+    const pidDir = path.join(tmp, "no-mfl-pid-dir");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "verify-report-1.json"),
+      JSON.stringify({ iteration: 1, max_fix_loops: -1 }),
+      "utf8",
+    );
+    expect(readLatestReportMaxLoops(pidDir)).toBeUndefined();
+  });
+});
+
+// ─── v2.1 Story 5: runTeamCollect primary bound gate ──────────────────────────
+
+/** Seed a TeamState with a specific fix_loop_count. */
+function seedTeamStateWithLoopCount(
+  sessionId: string,
+  fixLoopCount: number,
+): void {
+  writeModeState<TeamState>(
+    "team",
+    {
+      active: true,
+      session_id: sessionId,
+      started_at: new Date().toISOString(),
+      spawned: 2,
+      done: 0,
+      workers: [
+        { id: "worker-1", status: "pending" },
+        { id: "worker-2", status: "pending" },
+      ],
+      current_phase: "executing",
+      stage_history: ["initializing", "executing"],
+      fix_loop_count: fixLoopCount,
+    },
+    sessionId,
+  );
+}
+
+/** Seed a verify-report-N.json with a chosen max_fix_loops value. */
+function seedReportWithMaxLoops(
+  pidDir: string,
+  iteration: number,
+  maxLoops: number,
+): void {
+  fs.mkdirSync(pidDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pidDir, `verify-report-${iteration}.json`),
+    JSON.stringify({
+      iteration,
+      ts: new Date().toISOString(),
+      max_fix_loops: maxLoops,
+      vitest: { exitCode: 1, tail: "FAIL" },
+      tsc: { exitCode: 0, tail: "" },
+      biome: { exitCode: 0, tail: "" },
+      ok: false,
+    }),
+    "utf8",
+  );
+}
+
+describe("runTeamCollect v2.1 Story 5 — bound gate (verify_loop_exhausted)", () => {
+  it("transitions to failed when verify-fail signal present AND fix_loop_count >= max", () => {
+    const sessionId = "sess-s5-exhausted-3-of-3";
+    const prevCwd = process.cwd();
+    process.chdir(tmp);
+    try {
+      seedTeamStateWithLoopCount(sessionId, 3);
+    } finally {
+      process.chdir(prevCwd);
+    }
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 80001);
+    writePidFile(pidDir, 2, 80002);
+    writeShardFile(pidDir, 1);
+    writeShardFile(pidDir, 2);
+    seedReportWithMaxLoops(pidDir, 1, 3);
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(report.finalPhase).toBe("failed");
+    // No fresh summary written when exhausted.
+    expect(
+      fs.existsSync(path.join(pidDir, "verify-fail-summary.json")),
+    ).toBe(false);
+    // Log message identifies the exhaustion.
+    expect(
+      report.logLines.some(
+        (l) =>
+          l.includes("verify_loop_exhausted") ||
+          l.includes("fix_loop_count"),
+      ),
+    ).toBe(true);
+    // TeamState reflects failed phase.
+    expect(readModeState<TeamState>("team", sessionId)!.current_phase).toBe(
+      "failed",
+    );
+  });
+
+  it("transitions to fixing when verify-fail signal present AND fix_loop_count < max", () => {
+    const sessionId = "sess-s5-allowed-2-of-3";
+    const prevCwd = process.cwd();
+    process.chdir(tmp);
+    try {
+      seedTeamStateWithLoopCount(sessionId, 2);
+    } finally {
+      process.chdir(prevCwd);
+    }
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 80003);
+    writePidFile(pidDir, 2, 80004);
+    writeShardFile(pidDir, 1);
+    writeShardFile(pidDir, 2);
+    seedReportWithMaxLoops(pidDir, 1, 3);
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const report = runTeamCollect(sessionId, {
+      cwd: tmp,
+      isProcessAlive: () => true,
+    });
+
+    expect(report.finalPhase).toBe("fixing");
+    // Summary written normally.
+    expect(
+      fs.existsSync(path.join(pidDir, "verify-fail-summary.json")),
+    ).toBe(true);
+  });
+
+  it("env OMCP_TEAM_MAX_FIX_LOOPS overrides report value at the collect bound", () => {
+    const sessionId = "sess-s5-env-tighter";
+    const prevCwd = process.cwd();
+    process.chdir(tmp);
+    try {
+      seedTeamStateWithLoopCount(sessionId, 2);
+    } finally {
+      process.chdir(prevCwd);
+    }
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 80005);
+    writeShardFile(pidDir, 1);
+    seedReportWithMaxLoops(pidDir, 1, 5); // report says max=5
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const prevEnv = process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+    process.env.OMCP_TEAM_MAX_FIX_LOOPS = "2"; // env tighter
+    try {
+      const report = runTeamCollect(sessionId, {
+        cwd: tmp,
+        isProcessAlive: () => true,
+      });
+      // 2 >= 2 under env-imposed bound → failed.
+      expect(report.finalPhase).toBe("failed");
+    } finally {
+      if (prevEnv === undefined) delete process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+      else process.env.OMCP_TEAM_MAX_FIX_LOOPS = prevEnv;
+    }
+  });
+
+  it("default max=3 applies when no env and no report present", () => {
+    const sessionId = "sess-s5-no-report-default-3";
+    const prevCwd = process.cwd();
+    process.chdir(tmp);
+    try {
+      seedTeamStateWithLoopCount(sessionId, 3);
+    } finally {
+      process.chdir(prevCwd);
+    }
+
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 80006);
+    writeShardFile(pidDir, 1);
+    // No verify-report-*.json — defaults to 3.
+    writeVerifyFailSignal(pidDir, 1, 1, ["vitest"]);
+
+    const prevEnv = process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+    delete process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+    try {
+      const report = runTeamCollect(sessionId, {
+        cwd: tmp,
+        isProcessAlive: () => true,
+      });
+      // 3 >= default 3 → failed.
+      expect(report.finalPhase).toBe("failed");
+    } finally {
+      if (prevEnv !== undefined) process.env.OMCP_TEAM_MAX_FIX_LOOPS = prevEnv;
+    }
   });
 });
 

@@ -32,6 +32,7 @@ import {
 import { spawnCrossPlatform } from "../../runtime/resolve-executable.js";
 import {
   readModeState,
+  transitionPhase,
   writeModeState,
   type TeamState,
 } from "../../runtime/mode-state.js";
@@ -333,6 +334,12 @@ export interface SpawnFixWorkerOpts {
    * from pidDir (written by runTeamCollect in Story 3).
    */
   verifyFailSummary?: VerifyFailSummary;
+  /**
+   * Override the resolved max-fix-loops bound (Story 5). When passed,
+   * resolveMaxLoops() ranks: env OMCP_TEAM_MAX_FIX_LOOPS > this value >
+   * latest verify-report-N.json.max_fix_loops > DEFAULT_MAX_LOOPS.
+   */
+  maxLoops?: number;
 }
 
 export interface SpawnFixWorkerResult {
@@ -341,6 +348,18 @@ export interface SpawnFixWorkerResult {
   pid?: number;
   fixLoopCount: number;
   promptPreview: string;
+  /**
+   * Resolved max-fix-loops bound applied to this decision (Story 5).
+   * Stored on every result so callers can render bound vs current count.
+   */
+  maxFixLoops: number;
+  /**
+   * True when the bound was exhausted BEFORE this spawn — in which case
+   * no copilot worker was launched, fix_loop_count was NOT incremented,
+   * and TeamState was transitioned to `failed` with reason
+   * `verify_loop_exhausted`. Story 5 gate.
+   */
+  exhausted: boolean;
 }
 
 /** Maximum body length (chars) included in the worker prompt. */
@@ -535,6 +554,39 @@ export function spawnFixWorker(opts: SpawnFixWorkerOpts): SpawnFixWorkerResult {
     );
   }
 
+  // Story 5 bound check. resolveMaxLoops ranks env > opts > default; we feed
+  // in the verifyReport.max_fix_loops as the "opts" tier so a session that
+  // ran with a custom --max-loops in the verify pass carries that value
+  // forward into the bound check at fix-spawn time.
+  const previousCount = state.fix_loop_count ?? 0;
+  const maxFixLoops = resolveMaxLoops(
+    opts.maxLoops ?? verifyReport?.max_fix_loops,
+  );
+  if (previousCount >= maxFixLoops) {
+    // Loop exhausted — transition to failed and skip the spawn. Defense-in-
+    // depth: runTeamCollect also performs this check at the upstream gate
+    // (Story 5 extension), but downstream callers that invoke spawnFixWorker
+    // directly should not bypass the bound.
+    try {
+      transitionPhase(
+        opts.sessionId,
+        "failed",
+        `verify_loop_exhausted (${previousCount}/${maxFixLoops})`,
+      );
+    } catch {
+      // Already terminal (failed → failed is invalid transition) — that's
+      // fine; the bound semantic still holds (no spawn).
+    }
+    return {
+      fixWorkerIndex: -1,
+      pidPath: "",
+      fixLoopCount: previousCount,
+      promptPreview: "",
+      maxFixLoops,
+      exhausted: true,
+    };
+  }
+
   const fixLoopCount = incrementFixLoopCount(opts.sessionId, cwd);
   const fixWorkerIndex = nextWorkerIndex(pidDir);
 
@@ -584,7 +636,74 @@ export function spawnFixWorker(opts: SpawnFixWorkerOpts): SpawnFixWorkerResult {
     pid: handle.pid,
     fixLoopCount,
     promptPreview: prompt.slice(0, 200),
+    maxFixLoops,
+    exhausted: false,
   };
+}
+
+// ─── Story 5: team-fix CLI wrapper ────────────────────────────────────────────
+
+export interface RunTeamFixCliOpts {
+  maxLoops?: number;
+  cwd?: string;
+  spawnFn?: FixWorkerSpawnFn;
+  log?: (line: string) => void;
+  errLog?: (line: string) => void;
+}
+
+/**
+ * `omcp team-fix <session-id>` — wraps spawnFixWorker with CLI argv
+ * validation + a one-shot summary print. Returns the process exit code:
+ *   0 → fix-worker spawned (loop continues)
+ *   3 → bound exhausted → TeamState transitioned to `failed`
+ *   2 → invalid sessionId
+ *   1 → spawn-side error (no pidDir / missing TeamState / no summary)
+ */
+export function runTeamFixCli(
+  sessionId: string,
+  opts: RunTeamFixCliOpts = {},
+): number {
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const errLog = opts.errLog ?? ((line: string) => console.error(line));
+
+  try {
+    assertSafeSlug(sessionId, "session-id");
+  } catch (err) {
+    if (err instanceof UnsafeSlugError) {
+      errLog(`omcp team-fix: ${err.message}`);
+    } else {
+      errLog(`omcp team-fix: invalid session-id`);
+    }
+    return 2;
+  }
+
+  let result: SpawnFixWorkerResult;
+  try {
+    result = spawnFixWorker({
+      sessionId,
+      maxLoops: opts.maxLoops,
+      cwd: opts.cwd,
+      spawnFn: opts.spawnFn,
+    });
+  } catch (err) {
+    errLog(`omcp team-fix: ${(err as Error).message}`);
+    return 1;
+  }
+
+  log(`omcp team-fix: session=${sessionId}`);
+  log(`  max_fix_loops:   ${result.maxFixLoops}`);
+  log(`  fix_loop_count:  ${result.fixLoopCount}`);
+  log(`  exhausted:       ${result.exhausted}`);
+  if (result.exhausted) {
+    log(`  outcome:         verify_loop_exhausted → TeamState=failed`);
+    return 3;
+  }
+  log(`  fix_worker_idx:  ${result.fixWorkerIndex}`);
+  if (result.pid !== undefined) {
+    log(`  pid:             ${result.pid}`);
+    log(`  pidfile:         ${result.pidPath}`);
+  }
+  return 0;
 }
 
 // ─── CLI wrapper ──────────────────────────────────────────────────────────────

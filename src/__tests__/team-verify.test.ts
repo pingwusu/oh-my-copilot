@@ -922,6 +922,210 @@ describe("spawnFixWorker — successive spawns chain fix_loop_count + worker ind
   });
 });
 
+// ─── Story 5: loop-bounding ───────────────────────────────────────────────────
+
+describe("spawnFixWorker — bound check (Story 5)", () => {
+  it("allows spawn when previousCount=0 + maxLoops=3 (counter→1)", () => {
+    const sessionId = "sess-bound-allow-0-of-3";
+    seedFixTeamState(sessionId, { fixLoopCount: 0 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70001);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const result = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(70901, []),
+    });
+
+    expect(result.exhausted).toBe(false);
+    expect(result.fixLoopCount).toBe(1);
+    expect(result.maxFixLoops).toBe(3);
+    expect(readModeState<TeamState>("team", sessionId)!.current_phase).toBe(
+      "fixing",
+    );
+  });
+
+  it("refuses spawn when previousCount=maxLoops (1/1) → exhausted + failed transition", () => {
+    const sessionId = "sess-bound-exhaust-1-of-1";
+    seedFixTeamState(sessionId, { fixLoopCount: 1 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70002);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const captured: Array<{
+      cmd: string;
+      args: string[];
+      env: NodeJS.ProcessEnv;
+      detached: boolean;
+    }> = [];
+    const result = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 1,
+      spawnFn: makeFixSpawn(70902, captured),
+    });
+
+    expect(result.exhausted).toBe(true);
+    expect(result.fixLoopCount).toBe(1); // not incremented
+    expect(result.maxFixLoops).toBe(1);
+    expect(captured).toHaveLength(0); // no spawn occurred
+    // TeamState transitions to failed.
+    const state = readModeState<TeamState>("team", sessionId)!;
+    expect(state.current_phase).toBe("failed");
+    expect(state.fix_loop_count).toBe(1); // unchanged
+  });
+
+  it("refuses spawn when previousCount=maxLoops (3/3) → failed", () => {
+    const sessionId = "sess-bound-exhaust-3-of-3";
+    seedFixTeamState(sessionId, { fixLoopCount: 3 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70003);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const result = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(70903, []),
+    });
+
+    expect(result.exhausted).toBe(true);
+    expect(readModeState<TeamState>("team", sessionId)!.current_phase).toBe(
+      "failed",
+    );
+  });
+
+  it("allows spawn at the boundary previousCount=maxLoops-1 (2/3 → 3)", () => {
+    const sessionId = "sess-bound-boundary-2-of-3";
+    seedFixTeamState(sessionId, { fixLoopCount: 2 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70004);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const result = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(70904, []),
+    });
+
+    expect(result.exhausted).toBe(false);
+    expect(result.fixLoopCount).toBe(3);
+  });
+
+  it("env OMCP_TEAM_MAX_FIX_LOOPS overrides opts.maxLoops at the bound check", () => {
+    const sessionId = "sess-bound-env-override";
+    seedFixTeamState(sessionId, { fixLoopCount: 2 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70005);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const prevEnv = process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+    process.env.OMCP_TEAM_MAX_FIX_LOOPS = "2"; // tighter than opts.maxLoops=5
+    try {
+      const result = spawnFixWorker({
+        sessionId,
+        cwd: tmp,
+        maxLoops: 5,
+        spawnFn: makeFixSpawn(70905, []),
+      });
+      // 2 >= 2 → exhausted under the env-imposed bound.
+      expect(result.exhausted).toBe(true);
+      expect(result.maxFixLoops).toBe(2);
+    } finally {
+      if (prevEnv === undefined) delete process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+      else process.env.OMCP_TEAM_MAX_FIX_LOOPS = prevEnv;
+    }
+  });
+
+  it("integration: max-loops=3 + 3 successive fail-spawns → 4th refused as exhausted", () => {
+    const sessionId = "sess-bound-integration-3-fails";
+    seedFixTeamState(sessionId, { fixLoopCount: 0 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70006);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const r1 = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(80001, []),
+    });
+    const r2 = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(80002, []),
+    });
+    const r3 = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(80003, []),
+    });
+    const r4 = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 3,
+      spawnFn: makeFixSpawn(80004, []),
+    });
+
+    expect(r1.exhausted).toBe(false);
+    expect(r1.fixLoopCount).toBe(1);
+    expect(r2.exhausted).toBe(false);
+    expect(r2.fixLoopCount).toBe(2);
+    expect(r3.exhausted).toBe(false);
+    expect(r3.fixLoopCount).toBe(3);
+    expect(r4.exhausted).toBe(true);
+    expect(r4.fixLoopCount).toBe(3);
+    expect(readModeState<TeamState>("team", sessionId)!.current_phase).toBe(
+      "failed",
+    );
+  });
+
+  it("verifyReport.max_fix_loops carries forward into the bound when opts.maxLoops omitted", () => {
+    const sessionId = "sess-bound-report-carry";
+    seedFixTeamState(sessionId, { fixLoopCount: 1 });
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 70007);
+    // Report sets max_fix_loops=1 via runTeamVerify with maxLoops=1.
+    runTeamVerify({
+      sessionId,
+      cwd: tmp,
+      maxLoops: 1,
+      spawnFn: makeSpawnFn({
+        ...ALL_PASS,
+        "npx vitest": { exitCode: 1, output: "fail" },
+      }),
+    });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    // No env, no opts.maxLoops → falls back to report.max_fix_loops=1.
+    // previousCount=1 >= 1 → exhausted.
+    const prevEnv = process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+    delete process.env.OMCP_TEAM_MAX_FIX_LOOPS;
+    try {
+      const result = spawnFixWorker({
+        sessionId,
+        cwd: tmp,
+        spawnFn: makeFixSpawn(70907, []),
+      });
+      expect(result.maxFixLoops).toBe(1);
+      expect(result.exhausted).toBe(true);
+    } finally {
+      if (prevEnv !== undefined) process.env.OMCP_TEAM_MAX_FIX_LOOPS = prevEnv;
+    }
+  });
+});
+
 describe("spawnFixWorker — skips pidfile write when spawn returns no pid", () => {
   it("a spawn returning pid=undefined still completes but writes no pidfile", () => {
     const sessionId = "sess-no-pid";

@@ -91,6 +91,73 @@ export interface TeamCollectReport {
  * doesn't poison the entire batch. Exported for direct unit-testing.
  */
 /**
+ * Default max-fix-loops bound when no env / report value is available.
+ * Mirrors team-verify's DEFAULT_MAX_LOOPS — kept in sync via the
+ * resolveMaxFixLoops helper here and resolveMaxLoops there.
+ */
+const COLLECT_DEFAULT_MAX_LOOPS = 3;
+
+/**
+ * Resolve the max-fix-loops bound for the team-collect Story 5 gate.
+ * Precedence: env OMCP_TEAM_MAX_FIX_LOOPS > the latest verify-report-N.json's
+ * max_fix_loops value > COLLECT_DEFAULT_MAX_LOOPS (3). Exported for tests.
+ */
+export function resolveMaxFixLoops(
+  reportMaxLoops?: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const fromEnv = env.OMCP_TEAM_MAX_FIX_LOOPS;
+  if (fromEnv !== undefined && fromEnv !== "") {
+    const n = Number(fromEnv);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  if (
+    reportMaxLoops !== undefined &&
+    Number.isFinite(reportMaxLoops) &&
+    reportMaxLoops > 0
+  ) {
+    return reportMaxLoops;
+  }
+  return COLLECT_DEFAULT_MAX_LOOPS;
+}
+
+/**
+ * Read the `max_fix_loops` field from the highest-numbered verify-report-N.json
+ * in `pidDir`. Returns undefined when no report exists or the file is
+ * unparseable. Defensive — corrupt reports do not poison the bound.
+ */
+export function readLatestReportMaxLoops(pidDir: string): number | undefined {
+  if (!existsSync(pidDir)) return undefined;
+  let latestN = 0;
+  let latestPath: string | undefined;
+  for (const f of readdirSync(pidDir)) {
+    const m = /^verify-report-(\d+)\.json$/.exec(f);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > latestN) {
+      latestN = n;
+      latestPath = join(pidDir, f);
+    }
+  }
+  if (!latestPath) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(latestPath, "utf8")) as {
+      max_fix_loops?: number;
+    };
+    if (
+      typeof parsed.max_fix_loops === "number" &&
+      Number.isFinite(parsed.max_fix_loops) &&
+      parsed.max_fix_loops > 0
+    ) {
+      return parsed.max_fix_loops;
+    }
+  } catch {
+    // ignore — corrupt report falls back to default
+  }
+  return undefined;
+}
+
+/**
  * Build the `transitionPhase` reason annotation for a `fixing` transition.
  * Reports BOTH merge-conflict and verify-fail counts so the stage_history
  * record (and any postmortem inspection) accurately reflects all triggers.
@@ -277,6 +344,11 @@ export function runTeamCollect(
   // but suppressed by the allShardsPresent gate). Only the "triggered" case
   // gets reported on TeamCollectReport — see GATE NOTE below.
   let verifyFailTriggered = false;
+  // Story 5: tracks whether the fix-loop bound was hit and the transition
+  // went directly to 'failed' (reason: verify_loop_exhausted) without writing
+  // a fresh verify-fail-summary.json — the summary is moot when no further
+  // fix-spawn will run.
+  let verifyFailExhausted = false;
 
   // Determine target phase.
   let targetPhase: TeamPhase;
@@ -372,41 +444,61 @@ export function runTeamCollect(
     // a single corrupt file derail an otherwise-healthy in-flight team.
     if (hasVerifyFail) {
       verifyFailTriggered = true;
-      if (targetPhase === "completed") {
+      // Story 5 primary gate: if fix_loop_count has reached max_fix_loops,
+      // transition directly to 'failed' with reason 'verify_loop_exhausted'
+      // instead of advancing into 'fixing'. spawnFixWorker carries its own
+      // defense-in-depth check, but this gate prevents the team from even
+      // appearing as fix-needed when the loop is exhausted.
+      const currentFixLoops = state.fix_loop_count ?? 0;
+      const reportMaxLoops = readLatestReportMaxLoops(pidDir);
+      const effectiveMaxLoops = resolveMaxFixLoops(reportMaxLoops);
+      const loopExhausted = currentFixLoops >= effectiveMaxLoops;
+      if (loopExhausted) {
+        targetPhase = "failed";
+        verifyFailExhausted = true;
+        logLines.push(
+          `[team-collect] verify-fail signals present BUT fix_loop_count (${currentFixLoops}) >= max_fix_loops (${effectiveMaxLoops}) — transitioning to 'failed' (reason: verify_loop_exhausted)`,
+        );
+      } else if (targetPhase === "completed") {
         targetPhase = "fixing";
         logLines.push(
-          `[team-collect] ${verifyFailSignals.length} worker(s) have verify-fail signal(s) — overriding 'completed' → 'fixing'`,
+          `[team-collect] ${verifyFailSignals.length} worker(s) have verify-fail signal(s) (loop ${currentFixLoops}/${effectiveMaxLoops}) — overriding 'completed' → 'fixing'`,
         );
       } else if (targetPhase === "fixing") {
         logLines.push(
-          `[team-collect] verify-fail signals present alongside merge conflicts — staying in 'fixing' with both artifacts`,
+          `[team-collect] verify-fail signals present alongside merge conflicts (loop ${currentFixLoops}/${effectiveMaxLoops}) — staying in 'fixing' with both artifacts`,
         );
       }
       // Write verify-fail-summary.json regardless of whether we got here via
       // a fresh `completed → fixing` flip or a pre-existing conflicts path.
-      const summaryPath = join(pidDir, "verify-fail-summary.json");
-      try {
-        mkdirSync(pidDir, { recursive: true });
-        atomicWriteFileSync(
-          summaryPath,
-          JSON.stringify(
-            {
-              detectedAt: new Date().toISOString(),
-              sessionId,
-              signalCount: verifyFailSignals.length,
-              signals: verifyFailSignals,
-            },
-            null,
-            2,
-          ),
-        );
-        logLines.push(
-          `[team-collect] verify-fail summary written to ${summaryPath} — fix-worker will read from here`,
-        );
-      } catch {
-        logLines.push(
-          `[team-collect] warning: failed to write verify-fail-summary.json to ${summaryPath}`,
-        );
+      // Story 5 exception: skip the summary write when the bound was
+      // exhausted — no fix-spawn will read it, and a fresh summary at this
+      // point would be misleading postmortem evidence.
+      if (!verifyFailExhausted) {
+        const summaryPath = join(pidDir, "verify-fail-summary.json");
+        try {
+          mkdirSync(pidDir, { recursive: true });
+          atomicWriteFileSync(
+            summaryPath,
+            JSON.stringify(
+              {
+                detectedAt: new Date().toISOString(),
+                sessionId,
+                signalCount: verifyFailSignals.length,
+                signals: verifyFailSignals,
+              },
+              null,
+              2,
+            ),
+          );
+          logLines.push(
+            `[team-collect] verify-fail summary written to ${summaryPath} — fix-worker will read from here`,
+          );
+        } catch {
+          logLines.push(
+            `[team-collect] warning: failed to write verify-fail-summary.json to ${summaryPath}`,
+          );
+        }
       }
     }
   } else if (hasDeadWithoutShard) {
@@ -448,7 +540,9 @@ export function runTeamCollect(
               mergeConflicts?.length ?? 0,
               hasVerifyFail ? verifyFailSignals.length : 0,
             )
-          : "dead worker(s) without shard";
+          : verifyFailExhausted
+            ? "verify_loop_exhausted"
+            : "dead worker(s) without shard";
     const updated = transitionPhase(sessionId, targetPhase, reason);
     finalPhase = updated.current_phase ?? targetPhase;
   }
