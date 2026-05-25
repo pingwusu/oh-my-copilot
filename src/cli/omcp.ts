@@ -63,6 +63,7 @@ import {
   runTeamOutboxReadCli,
   runTeamOutboxWriteCli,
 } from "./commands/team-outbox.js";
+import { runTeamInboxWriteCli } from "./commands/team-inbox.js";
 import {
   ChainParseError,
   parseChainSpec,
@@ -405,6 +406,15 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         );
       },
     );
+
+  program
+    .command("team-inbox-write <session-id> <markdown-body>")
+    .description(
+      "Append a Markdown message to the per-session inbox (EB-06 Story 6). Rotates AT 1MB to inbox-N.md (env OMCP_INBOX_ROTATE_BYTES overrides). Shares the outbox lockfile pattern.",
+    )
+    .action((sessionId: string, body: string) => {
+      process.exitCode = runTeamInboxWriteCli(sessionId, body);
+    });
 
   program
     .command("team-outbox-read <session-id> <consumer>")
