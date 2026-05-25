@@ -31,4 +31,7 @@ jobs:
       - run: node dist/scripts/sync-plugin-mirror.js
       - run: node dist/scripts/verify-catalog.js
       - run: node dist/scripts/verify-plugin-bundle.js
-      - run: npm test
+      # Integration tests requiring real `copilot` CLI on PATH are excluded on CI runners
+      # (copilot CLI is not installed in GitHub Actions Windows runners). These tests run
+      # locally during development. See docs/adr/ADR-v2.0-public-release-deferred.md.
+      - run: npx vitest run --exclude "src/__tests__/uninstall.test.ts" --exclude "src/__tests__/team-stop.test.ts" --exclude "src/__tests__/smoke-install.test.ts"
