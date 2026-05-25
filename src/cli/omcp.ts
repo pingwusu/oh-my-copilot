@@ -64,6 +64,7 @@ import {
   runTeamOutboxWriteCli,
 } from "./commands/team-outbox.js";
 import { runTeamInboxWriteCli } from "./commands/team-inbox.js";
+import { runTeamHeartbeatCli } from "./commands/team-heartbeat.js";
 import {
   ChainParseError,
   parseChainSpec,
@@ -406,6 +407,15 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         );
       },
     );
+
+  program
+    .command("team-heartbeat <session-id> <worker-index>")
+    .description(
+      "Write a worker heartbeat (EB-06 Story 7). Schema {ts, workerIndex, pid} via atomicWriteFileSync. Watchdog reads ts field as primary freshness signal (ADR-EB-05); shard-mtime fallback for v2.1 workers.",
+    )
+    .action((sessionId: string, workerIndex: string) => {
+      process.exitCode = runTeamHeartbeatCli(sessionId, workerIndex);
+    });
 
   program
     .command("team-inbox-write <session-id> <markdown-body>")

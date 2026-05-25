@@ -28,6 +28,11 @@ import type { MergeReport } from "../../lib/team-shard-state.js";
 import { writeModeState, transitionPhase } from "../../runtime/mode-state.js";
 import type { TeamState } from "../../runtime/mode-state.js";
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
+import {
+  HEARTBEAT_ABSENT_WARNING_MULTIPLIER,
+  resolveHeartbeatFreshnessMs,
+  resolveHeartbeatIntervalMs,
+} from "./team-heartbeat.js";
 
 export interface TeamSpec {
   count: number;
@@ -429,6 +434,35 @@ export function runTeamWatchdog(opts: {
       continue;
     }
 
+    // EB-06 Story 7 — heartbeat freshness check (primary signal per
+    // ADR-omcp-eb-05). Read heartbeat.json's `ts` field FIRST; if present
+    // and parseable, it's the primary liveness signal (avoids the NTFS
+    // 15.625ms mtime quantum race documented in pre-mortem scenario 4).
+    // Falls back to shard-mtime when heartbeat is absent — back-compat
+    // with v2.1 workers that don't yet call `omcp team-heartbeat`.
+    const heartbeatPath = join(pidDir, `worker-${idx}-heartbeat.json`);
+    let heartbeatTsMs: number | undefined;
+    let heartbeatPresent = false;
+    if (existsSync(heartbeatPath)) {
+      try {
+        const raw = readFileSync(heartbeatPath, "utf8");
+        const parsed = JSON.parse(raw) as { ts?: unknown };
+        if (typeof parsed.ts === "string") {
+          const parsedTs = Date.parse(parsed.ts);
+          if (Number.isFinite(parsedTs)) {
+            heartbeatTsMs = parsedTs;
+            heartbeatPresent = true;
+          }
+        }
+      } catch {
+        // Corrupt heartbeat — treat as absent + fall back to mtime path
+        // below. Emit a warning so the operator can investigate.
+        logLines.push(
+          `[omcp watchdog] worker-${idx} (pid=${pid}) heartbeat.json present but unparseable — falling back to shard-mtime`,
+        );
+      }
+    }
+
     // Check shard-write mtime for staleness.
     // Shard file is worker-K-shard.json under the pidDir (written by the worker
     // to report incremental task completion).
@@ -436,12 +470,39 @@ export function runTeamWatchdog(opts: {
     let shardMtimeMs: number | undefined;
     let stuck = false;
 
-    if (existsSync(shardFile)) {
+    if (heartbeatPresent && heartbeatTsMs !== undefined) {
+      // Heartbeat-primary path: ADR-EB-05 §3 precedence rule.
+      const freshnessThresholdMs = resolveHeartbeatFreshnessMs();
+      stuck = now() - heartbeatTsMs > freshnessThresholdMs;
+      // Still record shardMtimeMs for postmortem reading (when shard exists).
+      if (existsSync(shardFile)) {
+        try {
+          shardMtimeMs = statSync(shardFile).mtimeMs;
+        } catch {
+          // ignore — heartbeat is the load-bearing signal here
+        }
+      }
+    } else if (existsSync(shardFile)) {
       try {
         shardMtimeMs = statSync(shardFile).mtimeMs;
         stuck = now() - shardMtimeMs > timeoutMs;
       } catch {
         // Can't stat — treat as not stuck.
+      }
+      // ADR-EB-05 §4 heartbeat-absent observability: when worker has been
+      // alive for >2× heartbeat interval but never wrote heartbeat.json,
+      // surface a warning. Pidfile mtime is the spawn-time proxy.
+      try {
+        const spawnAgeMs = now() - statSync(pidPath).mtimeMs;
+        const warnThresholdMs =
+          resolveHeartbeatIntervalMs() * HEARTBEAT_ABSENT_WARNING_MULTIPLIER;
+        if (spawnAgeMs > warnThresholdMs) {
+          logLines.push(
+            `[omcp watchdog] worker-${idx} (pid=${pid}) not heartbeating — spawn-age ${spawnAgeMs}ms > ${warnThresholdMs}ms`,
+          );
+        }
+      } catch {
+        // stat-failure: skip observability check
       }
     } else {
       // No shard file yet: use pidfile mtime as proxy for "last activity".
