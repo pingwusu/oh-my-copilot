@@ -543,8 +543,21 @@ export function runTeamCollect(
           : verifyFailExhausted
             ? "verify_loop_exhausted"
             : "dead worker(s) without shard";
-    const updated = transitionPhase(sessionId, targetPhase, reason);
-    finalPhase = updated.current_phase ?? targetPhase;
+    // Story 21 — team-loop idempotence: skip the phase transition when
+    // already at the target phase (e.g., a re-run while already in 'fixing'
+    // with fresh verify-fail signals). VALID_TEAM_TRANSITIONS rejects
+    // self-transitions like 'fixing' → 'fixing'; the team-loop auto-
+    // orchestrator legitimately revisits the same phase across iterations,
+    // so re-emit the same finalPhase without churning the state machine.
+    if (currentPhase === targetPhase) {
+      logLines.push(
+        `[team-collect] already in target phase '${targetPhase}' — skipping idempotent transition (${reason})`,
+      );
+      finalPhase = targetPhase;
+    } else {
+      const updated = transitionPhase(sessionId, targetPhase, reason);
+      finalPhase = updated.current_phase ?? targetPhase;
+    }
   }
 
   return {

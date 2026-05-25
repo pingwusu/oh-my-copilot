@@ -58,6 +58,7 @@ import {
   runTeamVerifyCli,
 } from "./commands/team-verify.js";
 import { runTeamWait } from "./commands/team-wait.js";
+import { runTeamLoopCli } from "./commands/team-loop.js";
 import {
   ChainParseError,
   parseChainSpec,
@@ -358,6 +359,33 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .action((sessionId: string, opts: { maxLoops?: number }) => {
       process.exitCode = runTeamFixCli(sessionId, { maxLoops: opts.maxLoops });
     });
+
+  program
+    .command("team-loop <session-id>")
+    .description(
+      "Auto-iterate the verify/fix loop (verify → collect → if fixing spawn-fix → wait shard → repeat) until verify ok or bound exhausted. Exit 0 completed / 1 exhausted-or-fail / 2 invalid / 3 not-found.",
+    )
+    .option(
+      "--max-loops <n>",
+      "max fix-loop iterations (default 3; env OMCP_TEAM_MAX_FIX_LOOPS overrides; falls back to verify-report-N.json.max_fix_loops)",
+      (v) => Number(v),
+    )
+    .option(
+      "--shard-timeout <ms>",
+      "wait-for-shard deadline per fix-worker spawn (default 600000ms = 10 min)",
+      (v) => Number(v),
+    )
+    .action(
+      (
+        sessionId: string,
+        opts: { maxLoops?: number; shardTimeout?: number },
+      ) => {
+        process.exitCode = runTeamLoopCli(sessionId, {
+          maxLoops: opts.maxLoops,
+          shardTimeoutMs: opts.shardTimeout,
+        });
+      },
+    );
 
   program
     .command("team-wait <session-id>")
