@@ -210,9 +210,11 @@ per prd.json):
 - EB-06 N+2 (Stories 5-7 + EB-05 ADR): adds 27 (heartbeat) cases.
 - EB-06 N+3 (Stories 8-11): adds 12 (IPC smoke) + 2 updates to
   check-live-smoke = 12 cases net.
-- Projected total post-EB-06: ~1771 deterministic vitest cases on
-  the default lane + ~30s of 8-process tests on the `test-concurrent`
-  lane.
+- Actual total post-EB-06: 1800 deterministic vitest cases on the
+  default lane (5 skipped, 155/156 files green; +137 net over the 1663
+  baseline; exceeds the original ~1771 projection by ~29 cases — drift
+  attributable to incidental test additions during 11-story implementation)
+  + ~5s of 8-process tests on the `test-concurrent` lane.
 
 ## Follow-ups
 

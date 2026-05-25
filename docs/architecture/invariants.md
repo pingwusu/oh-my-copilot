@@ -57,6 +57,19 @@ hook process is killed mid-write.
   outside the runtime state path; the release script runs as a one-shot
   maintenance command, not in a concurrent hook environment.
 - `src/scripts/smoke-e2e.ts` — test fixture writes; not runtime state.
+- `src/cli/commands/team-outbox.ts` — `appendFileSync(outbox.jsonl, line)`
+  inside the hand-rolled lockfile sidecar contract per
+  `docs/adr/ADR-omcp-eb-02-outbox-schema.md`. The lockfile (`openSync('wx',
+  outbox.jsonl.lock)` + exponential backoff `[50,100,200,400,1000,2500]` ms +
+  30s stale-cleanup) serializes concurrent writers across processes, which
+  is the multi-process equivalent of atomicWriteFileSync's tempfile-rename
+  semantic. Cursor + truncation invariants (per-line 64KB cap, reader-side
+  partial-line tolerance) further insulate readers from any partial state.
+- `src/cli/commands/team-inbox.ts` — `appendFileSync(inbox-N.md, body)`
+  inside the per-session `inbox.lock` sidecar (sibling pattern to outbox).
+  Rotation decisions (1MB threshold default, env override
+  `OMCP_INBOX_ROTATE_BYTES`) run under the same lock so concurrent writers
+  observe a consistent current-file index.
 
 ---
 

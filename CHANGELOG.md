@@ -19,8 +19,8 @@ as a one-time scope-of-acceptance in
 record). Pattern NOT to be reused for other EB gates without similar
 explicit reasoning.
 
-Tests: 1663 baseline → **~1771 passing** (~+108 net deterministic
-vitest cases on the default lane) + ~30s of 8-process
+Tests: 1663 baseline → **1800 passing** (5 skipped, 155/156 files green;
++137 net deterministic vitest cases on the default lane) + ~5s of 8-process
 `child_process.spawn` concurrency tests on the new dedicated
 `test-concurrent` CI lane (gated by `OMCP_RUN_HEAVY_CONCURRENCY=1`).
 
