@@ -36,6 +36,10 @@ import {
   getRalphContext,
   readRalphState,
 } from "../../lib/ralph-state.js";
+import {
+  writeCostSummary,
+  type CostSummaryEntry,
+} from "../../lib/cost-summary-state.js";
 import { readBoulderState } from "../../lib/boulder-state.js";
 import { registerRalplan } from "../../ralplan/index.js";
 
@@ -373,12 +377,41 @@ export function runMode(opts: ModeOptions): number {
         }
       }
 
+      const iterationStartMs = Date.now();
       result = spawnSyncCrossPlatform("copilot", spawnArgs, {
         stdio: "inherit",
         shell: false,
       });
 
       const exitCode = result.status ?? 1;
+
+      // ADR-C1 Option C: post-spawn callback — write cost entry for this
+      // iteration. Fires on both success and failure paths. Errors are
+      // non-blocking (log to stderr, continue). Real cost tracking is v1.9;
+      // estimatedCost is 0 (schema-first placeholder).
+      {
+        const postSpawnPrd = exitCode === 0 ? getPrdCompletionStatus() : null;
+        const costEntry: CostSummaryEntry = {
+          iterationNumber: iteration,
+          durationMs: Date.now() - iterationStartMs,
+          exitCode,
+          estimatedCost: 0,
+          modeName: opts.mode,
+          prdProgress:
+            postSpawnPrd?.status
+              ? { completed: postSpawnPrd.status.completed, total: postSpawnPrd.status.total }
+              : null,
+          timestamp: new Date().toISOString(),
+        };
+        try {
+          writeCostSummary(sessionId, costEntry);
+        } catch (err) {
+          process.stderr.write(
+            `omcp: cost-summary write failed (iteration ${iteration}): ${String(err)}\n`,
+          );
+        }
+      }
+
       if (exitCode !== 0) {
         // Non-zero exit (crash/SIGINT/OOM): restore pre-spawn snapshot
         // (without outerLoopOwned flag, since the outer loop is exiting).
