@@ -68,6 +68,15 @@ export interface TeamState extends BaseModeState {
   current_phase?: TeamPhase;
   /** Ordered list of phases this session has passed through. Optional for back-compat. */
   stage_history?: TeamPhase[];
+  /**
+   * Count of fix-worker spawns initiated for this team session (v2.1 N+1 Story
+   * 4). Incremented at the spawn site BEFORE the detached worker is launched
+   * — semantically tracks "number of fix attempts initiated", not "completed".
+   * Story 5 will gate further spawns when this hits `max_fix_loops` (default
+   * 3; env OMCP_TEAM_MAX_FIX_LOOPS).
+   * Optional for back-compat with pre-2.1 sessions (treated as 0).
+   */
+  fix_loop_count?: number;
 }
 
 export interface ModeConfig {

@@ -15,7 +15,13 @@
 //   I8 — registered as `omcp team-verify` in src/cli/omcp.ts.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
@@ -23,6 +29,12 @@ import {
   assertSafeSlug,
   UnsafeSlugError,
 } from "../../runtime/safe-slug.js";
+import { spawnCrossPlatform } from "../../runtime/resolve-executable.js";
+import {
+  readModeState,
+  writeModeState,
+  type TeamState,
+} from "../../runtime/mode-state.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -276,6 +288,302 @@ export function runTeamVerify(
     iteration,
     workerSignals,
     report,
+  };
+}
+
+// ─── Story 4: spawnFixWorker ──────────────────────────────────────────────────
+
+export interface VerifyFailSummary {
+  detectedAt: string;
+  sessionId: string;
+  signalCount: number;
+  signals: Array<{
+    workerIndex: number;
+    iteration: number;
+    ts: string;
+    failedTools: string[];
+    reportPath: string;
+  }>;
+}
+
+export interface FixWorkerSpawnHandle {
+  pid?: number;
+  unref(): void;
+}
+
+export type FixWorkerSpawnFn = (
+  cmd: string,
+  args: string[],
+  opts: { detached: boolean; env: NodeJS.ProcessEnv },
+) => FixWorkerSpawnHandle;
+
+export interface SpawnFixWorkerOpts {
+  sessionId: string;
+  /** Override cwd (test hook). */
+  cwd?: string;
+  /** Inject the spawn function for deterministic tests. */
+  spawnFn?: FixWorkerSpawnFn;
+  /**
+   * Override the latest verify report; default reads the
+   * highest-numbered verify-report-N.json from pidDir.
+   */
+  verifyReport?: VerifyReport;
+  /**
+   * Override the fail summary; default reads verify-fail-summary.json
+   * from pidDir (written by runTeamCollect in Story 3).
+   */
+  verifyFailSummary?: VerifyFailSummary;
+}
+
+export interface SpawnFixWorkerResult {
+  fixWorkerIndex: number;
+  pidPath: string;
+  pid?: number;
+  fixLoopCount: number;
+  promptPreview: string;
+}
+
+/** Maximum body length (chars) included in the worker prompt. */
+const FIX_PROMPT_MAX_CHARS = 4000;
+
+function nextWorkerIndex(pidDir: string): number {
+  if (!existsSync(pidDir)) return 1;
+  let max = 0;
+  for (const f of readdirSync(pidDir)) {
+    const m = /^worker-(\d+)\.pid$/.exec(f);
+    if (m) {
+      const n = Number(m[1]);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return max + 1;
+}
+
+function readLatestVerifyReport(pidDir: string): VerifyReport | undefined {
+  if (!existsSync(pidDir)) return undefined;
+  let latestN = 0;
+  let latestPath: string | undefined;
+  for (const f of readdirSync(pidDir)) {
+    const m = /^verify-report-(\d+)\.json$/.exec(f);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > latestN) {
+      latestN = n;
+      latestPath = join(pidDir, f);
+    }
+  }
+  if (!latestPath) return undefined;
+  try {
+    return JSON.parse(readFileSync(latestPath, "utf8")) as VerifyReport;
+  } catch {
+    return undefined;
+  }
+}
+
+function readVerifyFailSummary(pidDir: string): VerifyFailSummary | undefined {
+  const p = join(pidDir, "verify-fail-summary.json");
+  if (!existsSync(p)) return undefined;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as VerifyFailSummary;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Increment TeamState.fix_loop_count atomically and return the new value.
+ * Treats a missing TeamState (or unparseable file) as a no-op that returns
+ * 0 — Story 5 will check this value before allowing further spawns, so a
+ * missing-state condition correctly degenerates to "max loops not yet
+ * exhausted, but no session to attribute the count to."
+ */
+export function incrementFixLoopCount(sessionId: string, cwd: string): number {
+  const state = readModeState<TeamState>("team", sessionId);
+  if (state === null) return 0;
+  const previous = state.fix_loop_count ?? 0;
+  const next = previous + 1;
+  // writeModeState calls atomicWriteFileSync internally (Invariant 2).
+  writeModeState<TeamState>(
+    "team",
+    {
+      ...state,
+      fix_loop_count: next,
+    },
+    sessionId,
+  );
+  // cwd parameter currently unused — writeModeState resolves state path via
+  // process.cwd(). Kept in the signature for future test injection so the
+  // caller can pass an explicit cwd without monkey-patching process.cwd().
+  void cwd;
+  return next;
+}
+
+/**
+ * Build the prompt body that the fix-worker receives via `copilot -p`.
+ * Short and structured: points the worker at the on-disk artifacts where
+ * the full verify output lives, lists which tools failed, and explicitly
+ * tells the worker to re-run `omcp team-verify` after applying fixes so
+ * the collect/verify loop can converge.
+ *
+ * Capped at FIX_PROMPT_MAX_CHARS to stay well under Windows argv limits.
+ * Exported for direct unit testing.
+ */
+export function buildFixWorkerPrompt(opts: {
+  sessionId: string;
+  fixLoopCount: number;
+  verifyReport?: VerifyReport;
+  verifyFailSummary?: VerifyFailSummary;
+  pidDir: string;
+}): string {
+  const lines: string[] = [];
+  lines.push(
+    `Fix the failing verify checks for omcp team session ${opts.sessionId} (fix attempt #${opts.fixLoopCount}).`,
+  );
+  lines.push("");
+
+  if (opts.verifyReport) {
+    const failed: string[] = [];
+    if (opts.verifyReport.vitest.exitCode !== 0) failed.push("vitest");
+    if (opts.verifyReport.tsc.exitCode !== 0) failed.push("tsc");
+    if (opts.verifyReport.biome.exitCode !== 0) failed.push("biome");
+    lines.push(
+      `Iteration ${opts.verifyReport.iteration} verify report — failed tool(s): ${failed.join(", ") || "(none reported)"}`,
+    );
+    lines.push("");
+    lines.push("Tool tails:");
+    for (const [name, r] of [
+      ["vitest", opts.verifyReport.vitest],
+      ["tsc", opts.verifyReport.tsc],
+      ["biome", opts.verifyReport.biome],
+    ] as const) {
+      if (r.exitCode === 0) continue;
+      lines.push(`--- ${name} (exit ${r.exitCode}) ---`);
+      lines.push(r.tail);
+      lines.push("");
+    }
+  }
+
+  if (opts.verifyFailSummary) {
+    lines.push(
+      `Verify-fail summary lists ${opts.verifyFailSummary.signalCount} worker signal(s): ${opts.verifyFailSummary.signals
+        .map((s) => `worker-${s.workerIndex}[${s.failedTools.join("/")}]`)
+        .join(", ")}`,
+    );
+    lines.push("");
+  }
+
+  lines.push(
+    `Full artifacts available on disk under ${opts.pidDir}:`,
+  );
+  lines.push("  - verify-fail-summary.json (worker signal aggregate)");
+  lines.push("  - verify-report-N.json (latest iteration's full tool output)");
+  lines.push("");
+  lines.push(
+    "Apply minimal-diff fixes that address the failing checks without rewriting passing tests or unrelated code.",
+  );
+  lines.push(
+    `After applying fixes, re-run \`omcp team-verify ${opts.sessionId}\` so the verify/fix loop can converge.`,
+  );
+
+  const body = lines.join("\n");
+  if (body.length > FIX_PROMPT_MAX_CHARS) {
+    return `${body.slice(0, FIX_PROMPT_MAX_CHARS - 32)}\n... (truncated for argv limit)`;
+  }
+  return body;
+}
+
+/**
+ * Spawn a single Copilot fix-worker (agent=debugger) for a team session that
+ * has verify-fail signals. The worker runs DETACHED — runTeam's pattern — so
+ * fix_loop_count is incremented at spawn-time (semantics: "fix attempts
+ * initiated", not "completed"). Story 5 will gate further spawns when this
+ * count hits max_fix_loops.
+ *
+ * No-ops with a thrown error when:
+ *   - sessionId fails assertSafeSlug
+ *   - No TeamState exists for the session
+ *   - No verify-fail-summary.json exists (Story 3 didn't write one;
+ *     calling fix-spawn without a fix-needed signal is a programming error)
+ *
+ * Returns the spawn record. The injected spawn function (default
+ * spawnCrossPlatform) determines the actual child-process semantics; tests
+ * pass a mock that records the call without spawning anything.
+ */
+export function spawnFixWorker(opts: SpawnFixWorkerOpts): SpawnFixWorkerResult {
+  assertSafeSlug(opts.sessionId, "session-id");
+  const cwd = opts.cwd ?? process.cwd();
+  const pidDir = join(cwd, ".omcp", "state", "team", opts.sessionId);
+  if (!existsSync(pidDir)) {
+    throw new Error(
+      `spawnFixWorker: no pidDir for session '${opts.sessionId}' at ${pidDir}`,
+    );
+  }
+
+  const state = readModeState<TeamState>("team", opts.sessionId);
+  if (state === null) {
+    throw new Error(
+      `spawnFixWorker: no TeamState for session '${opts.sessionId}'`,
+    );
+  }
+
+  const verifyReport = opts.verifyReport ?? readLatestVerifyReport(pidDir);
+  const verifyFailSummary =
+    opts.verifyFailSummary ?? readVerifyFailSummary(pidDir);
+  if (!verifyFailSummary) {
+    throw new Error(
+      `spawnFixWorker: missing verify-fail-summary.json — run team-collect first`,
+    );
+  }
+
+  const fixLoopCount = incrementFixLoopCount(opts.sessionId, cwd);
+  const fixWorkerIndex = nextWorkerIndex(pidDir);
+
+  const prompt = buildFixWorkerPrompt({
+    sessionId: opts.sessionId,
+    fixLoopCount,
+    verifyReport,
+    verifyFailSummary,
+    pidDir,
+  });
+
+  const args = ["-p", prompt, "--allow-all-tools", "--agent", "debugger"];
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    OMCP_TEAM_SESSION_ID: opts.sessionId,
+    OMCP_TEAM_WORKER_INDEX: String(fixWorkerIndex),
+    OMCP_TEAM_FIX_LOOP_COUNT: String(fixLoopCount),
+  };
+
+  const doSpawn: FixWorkerSpawnFn =
+    opts.spawnFn ??
+    ((cmd, spawnArgs, spawnOpts) => {
+      const child = spawnCrossPlatform(cmd, spawnArgs, {
+        detached: spawnOpts.detached,
+        stdio: "ignore",
+        env: spawnOpts.env,
+      });
+      return {
+        pid: child.pid,
+        unref: () => child.unref(),
+      };
+    });
+
+  const handle = doSpawn("copilot", args, { detached: true, env });
+  handle.unref();
+
+  const pidPath = join(pidDir, `worker-${fixWorkerIndex}.pid`);
+  if (handle.pid !== undefined) {
+    // Invariant 9 — pidfile written so cancel/cleanup can SIGTERM later.
+    // Invariant 2 — atomicWriteFileSync.
+    atomicWriteFileSync(pidPath, String(handle.pid));
+  }
+
+  return {
+    fixWorkerIndex,
+    pidPath,
+    pid: handle.pid,
+    fixLoopCount,
+    promptPreview: prompt.slice(0, 200),
   };
 }
 

@@ -22,13 +22,23 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import {
+  buildFixWorkerPrompt,
   clearWorkerVerifyFailSignals,
+  incrementFixLoopCount,
   resolveMaxLoops,
   runTeamVerify,
   runTeamVerifyCli,
+  spawnFixWorker,
+  type FixWorkerSpawnHandle,
+  type VerifyFailSummary,
   type VerifyReport,
   type VerifySpawnResult,
 } from "../cli/commands/team-verify.js";
+import {
+  readModeState,
+  writeModeState,
+  type TeamState,
+} from "../runtime/mode-state.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -541,5 +551,395 @@ describe("runTeamVerifyCli — argv validation + summary", () => {
     const summary = out.join("\n");
     expect(summary).toMatch(/ok:\s+false/);
     expect(summary).toMatch(/failed:\s+vitest, biome/);
+  });
+});
+
+// ─── Story 4: spawnFixWorker ──────────────────────────────────────────────────
+
+/**
+ * Seed a minimal TeamState for fix-worker spawn tests. Includes the v2.1
+ * fix_loop_count field (Story 4) as undefined so incrementFixLoopCount has
+ * to start from 0.
+ */
+function seedFixTeamState(
+  sessionId: string,
+  options?: { fixLoopCount?: number; workerCount?: number },
+): void {
+  const workerCount = options?.workerCount ?? 2;
+  writeModeState<TeamState>(
+    "team",
+    {
+      active: true,
+      session_id: sessionId,
+      started_at: new Date().toISOString(),
+      spawned: workerCount,
+      done: 0,
+      workers: Array.from({ length: workerCount }, (_, i) => ({
+        id: `worker-${i + 1}`,
+        status: "pending",
+      })),
+      current_phase: "fixing",
+      stage_history: ["initializing", "executing", "fixing"],
+      fix_loop_count: options?.fixLoopCount,
+    },
+    sessionId,
+  );
+}
+
+function seedVerifyFailSummary(
+  pidDir: string,
+  sessionId: string,
+  workers: Array<{ index: number; failedTools: string[] }>,
+): void {
+  fs.mkdirSync(pidDir, { recursive: true });
+  const ts = new Date().toISOString();
+  const summary: VerifyFailSummary = {
+    detectedAt: ts,
+    sessionId,
+    signalCount: workers.length,
+    signals: workers.map((w) => ({
+      workerIndex: w.index,
+      iteration: 1,
+      ts,
+      failedTools: w.failedTools,
+      reportPath: "verify-report-1.json",
+    })),
+  };
+  fs.writeFileSync(
+    path.join(pidDir, "verify-fail-summary.json"),
+    JSON.stringify(summary, null, 2),
+    "utf8",
+  );
+}
+
+function seedVerifyReport(
+  pidDir: string,
+  iteration: number,
+  failed: { vitest?: boolean; tsc?: boolean; biome?: boolean },
+): void {
+  fs.mkdirSync(pidDir, { recursive: true });
+  const tool = (failedFlag?: boolean) => ({
+    exitCode: failedFlag ? 1 : 0,
+    tail: failedFlag ? "FAIL example output line" : "",
+  });
+  const report: VerifyReport = {
+    iteration,
+    ts: new Date().toISOString(),
+    max_fix_loops: 3,
+    vitest: tool(failed.vitest),
+    tsc: tool(failed.tsc),
+    biome: tool(failed.biome),
+    ok: !(failed.vitest ?? failed.tsc ?? failed.biome),
+  };
+  fs.writeFileSync(
+    path.join(pidDir, `verify-report-${iteration}.json`),
+    JSON.stringify(report, null, 2),
+    "utf8",
+  );
+}
+
+/** Build a mock spawnFn that captures the spawn invocation + returns a configurable pid. */
+function makeFixSpawn(
+  pidToReturn: number | undefined,
+  captured: Array<{
+    cmd: string;
+    args: string[];
+    env: NodeJS.ProcessEnv;
+    detached: boolean;
+  }>,
+): (
+  cmd: string,
+  args: string[],
+  opts: { detached: boolean; env: NodeJS.ProcessEnv },
+) => FixWorkerSpawnHandle {
+  return (cmd, args, opts) => {
+    captured.push({ cmd, args, env: opts.env, detached: opts.detached });
+    return { pid: pidToReturn, unref: () => {} };
+  };
+}
+
+describe("incrementFixLoopCount", () => {
+  it("treats missing TeamState as no-op returning 0", () => {
+    expect(incrementFixLoopCount("sess-no-state", tmp)).toBe(0);
+  });
+
+  it("increments from undefined → 1", () => {
+    const sessionId = "sess-inc-from-undef";
+    seedFixTeamState(sessionId);
+    expect(incrementFixLoopCount(sessionId, tmp)).toBe(1);
+    expect(readModeState<TeamState>("team", sessionId)!.fix_loop_count).toBe(1);
+  });
+
+  it("increments from N → N+1 across consecutive calls", () => {
+    const sessionId = "sess-inc-monotonic";
+    seedFixTeamState(sessionId);
+    expect(incrementFixLoopCount(sessionId, tmp)).toBe(1);
+    expect(incrementFixLoopCount(sessionId, tmp)).toBe(2);
+    expect(incrementFixLoopCount(sessionId, tmp)).toBe(3);
+    expect(readModeState<TeamState>("team", sessionId)!.fix_loop_count).toBe(3);
+  });
+});
+
+describe("buildFixWorkerPrompt", () => {
+  it("includes session id, fix-loop number, failed-tool list, and re-run instruction", () => {
+    const pidDir = "/fake/pid/dir";
+    const prompt = buildFixWorkerPrompt({
+      sessionId: "sess-prompt",
+      fixLoopCount: 2,
+      pidDir,
+      verifyReport: {
+        iteration: 1,
+        ts: "2026-05-25T00:00:00Z",
+        max_fix_loops: 3,
+        vitest: { exitCode: 1, tail: "VITEST FAIL" },
+        tsc: { exitCode: 0, tail: "" },
+        biome: { exitCode: 1, tail: "BIOME FAIL" },
+        ok: false,
+      },
+      verifyFailSummary: {
+        detectedAt: "2026-05-25T00:00:01Z",
+        sessionId: "sess-prompt",
+        signalCount: 2,
+        signals: [
+          {
+            workerIndex: 1,
+            iteration: 1,
+            ts: "2026-05-25T00:00:00Z",
+            failedTools: ["vitest"],
+            reportPath: "verify-report-1.json",
+          },
+          {
+            workerIndex: 2,
+            iteration: 1,
+            ts: "2026-05-25T00:00:00Z",
+            failedTools: ["biome"],
+            reportPath: "verify-report-1.json",
+          },
+        ],
+      },
+    });
+
+    expect(prompt).toContain("sess-prompt");
+    expect(prompt).toContain("fix attempt #2");
+    expect(prompt).toContain("vitest, biome"); // failed tools list
+    expect(prompt).toContain("VITEST FAIL");
+    expect(prompt).toContain("BIOME FAIL");
+    expect(prompt).not.toContain("--- tsc"); // tsc passed → not included
+    expect(prompt).toContain("worker-1[vitest]");
+    expect(prompt).toContain("worker-2[biome]");
+    expect(prompt).toContain("omcp team-verify sess-prompt");
+    expect(prompt).toContain(pidDir);
+  });
+
+  it("truncates a prompt longer than FIX_PROMPT_MAX_CHARS (4000)", () => {
+    const longTail = "x".repeat(20000);
+    const prompt = buildFixWorkerPrompt({
+      sessionId: "sess-long",
+      fixLoopCount: 1,
+      pidDir: "/p",
+      verifyReport: {
+        iteration: 1,
+        ts: "2026-05-25T00:00:00Z",
+        max_fix_loops: 3,
+        vitest: { exitCode: 1, tail: longTail },
+        tsc: { exitCode: 0, tail: "" },
+        biome: { exitCode: 0, tail: "" },
+        ok: false,
+      },
+    });
+    expect(prompt.length).toBeLessThanOrEqual(4000);
+    expect(prompt).toContain("truncated");
+  });
+});
+
+describe("spawnFixWorker — happy path", () => {
+  it("increments fix_loop_count, picks next free worker index, writes pidfile, spawns copilot with agent=debugger", () => {
+    const sessionId = "sess-fix-happy";
+    seedFixTeamState(sessionId);
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 60001);
+    writePidFile(pidDir, 2, 60002);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [
+      { index: 1, failedTools: ["vitest"] },
+      { index: 2, failedTools: ["vitest"] },
+    ]);
+
+    const captured: Array<{
+      cmd: string;
+      args: string[];
+      env: NodeJS.ProcessEnv;
+      detached: boolean;
+    }> = [];
+    const result = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeFixSpawn(99999, captured),
+    });
+
+    expect(result.fixWorkerIndex).toBe(3); // 1, 2 taken → next = 3
+    expect(result.fixLoopCount).toBe(1);
+    expect(result.pid).toBe(99999);
+    expect(result.pidPath).toBe(path.join(pidDir, "worker-3.pid"));
+
+    // Pidfile must be written.
+    expect(fs.existsSync(result.pidPath)).toBe(true);
+    expect(fs.readFileSync(result.pidPath, "utf8")).toBe("99999");
+
+    // TeamState.fix_loop_count updated.
+    expect(readModeState<TeamState>("team", sessionId)!.fix_loop_count).toBe(1);
+
+    // Spawn invocation captured with correct shape.
+    expect(captured).toHaveLength(1);
+    expect(captured[0].cmd).toBe("copilot");
+    expect(captured[0].detached).toBe(true);
+    expect(captured[0].args).toContain("-p");
+    expect(captured[0].args).toContain("--allow-all-tools");
+    expect(captured[0].args).toContain("--agent");
+    expect(captured[0].args[captured[0].args.indexOf("--agent") + 1]).toBe(
+      "debugger",
+    );
+    // Env vars per runTeam pattern.
+    expect(captured[0].env.OMCP_TEAM_SESSION_ID).toBe(sessionId);
+    expect(captured[0].env.OMCP_TEAM_WORKER_INDEX).toBe("3");
+    expect(captured[0].env.OMCP_TEAM_FIX_LOOP_COUNT).toBe("1");
+  });
+
+  it("prompt body references verify-fail-summary contents", () => {
+    const sessionId = "sess-fix-prompt";
+    seedFixTeamState(sessionId);
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 60101);
+    seedVerifyReport(pidDir, 2, { tsc: true });
+    seedVerifyFailSummary(pidDir, sessionId, [
+      { index: 1, failedTools: ["tsc"] },
+    ]);
+
+    const captured: Array<{
+      cmd: string;
+      args: string[];
+      env: NodeJS.ProcessEnv;
+      detached: boolean;
+    }> = [];
+    spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeFixSpawn(60500, captured),
+    });
+
+    const promptArgIndex = captured[0].args.indexOf("-p") + 1;
+    const prompt = captured[0].args[promptArgIndex];
+    expect(prompt).toContain(sessionId);
+    expect(prompt).toContain("tsc"); // failed tool
+    expect(prompt).toContain("FAIL example output line"); // tail from seeded report
+  });
+});
+
+describe("spawnFixWorker — guard rails", () => {
+  it("throws on invalid sessionId (assertSafeSlug)", () => {
+    expect(() =>
+      spawnFixWorker({
+        sessionId: "../escape",
+        cwd: tmp,
+        spawnFn: makeFixSpawn(1, []),
+      }),
+    ).toThrow();
+  });
+
+  it("throws when pidDir is absent (no team session started)", () => {
+    expect(() =>
+      spawnFixWorker({
+        sessionId: "sess-no-piddir",
+        cwd: tmp,
+        spawnFn: makeFixSpawn(1, []),
+      }),
+    ).toThrow(/no pidDir/);
+  });
+
+  it("throws when TeamState is missing", () => {
+    const sessionId = "sess-no-state";
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    fs.mkdirSync(pidDir, { recursive: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+    expect(() =>
+      spawnFixWorker({
+        sessionId,
+        cwd: tmp,
+        spawnFn: makeFixSpawn(1, []),
+      }),
+    ).toThrow(/no TeamState/);
+  });
+
+  it("throws when verify-fail-summary.json is absent (programming error to fix-spawn without collect)", () => {
+    const sessionId = "sess-no-summary";
+    seedFixTeamState(sessionId);
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 60201);
+    expect(() =>
+      spawnFixWorker({
+        sessionId,
+        cwd: tmp,
+        spawnFn: makeFixSpawn(1, []),
+      }),
+    ).toThrow(/verify-fail-summary/);
+  });
+});
+
+describe("spawnFixWorker — successive spawns chain fix_loop_count + worker index", () => {
+  it("two spawns increment fix_loop_count 0→1→2 and worker index next→next+1", () => {
+    const sessionId = "sess-fix-chain";
+    seedFixTeamState(sessionId);
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 60301);
+    seedVerifyReport(pidDir, 1, { vitest: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["vitest"] }]);
+
+    const captured: Array<{
+      cmd: string;
+      args: string[];
+      env: NodeJS.ProcessEnv;
+      detached: boolean;
+    }> = [];
+    const r1 = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeFixSpawn(60401, captured),
+    });
+    const r2 = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeFixSpawn(60402, captured),
+    });
+
+    expect(r1.fixLoopCount).toBe(1);
+    expect(r2.fixLoopCount).toBe(2);
+    expect(r1.fixWorkerIndex).toBe(2); // worker-1.pid exists → next=2
+    expect(r2.fixWorkerIndex).toBe(3); // worker-1 + worker-2 now → next=3
+    expect(captured).toHaveLength(2);
+    expect(captured[0].env.OMCP_TEAM_FIX_LOOP_COUNT).toBe("1");
+    expect(captured[1].env.OMCP_TEAM_FIX_LOOP_COUNT).toBe("2");
+    expect(readModeState<TeamState>("team", sessionId)!.fix_loop_count).toBe(2);
+  });
+});
+
+describe("spawnFixWorker — skips pidfile write when spawn returns no pid", () => {
+  it("a spawn returning pid=undefined still completes but writes no pidfile", () => {
+    const sessionId = "sess-no-pid";
+    seedFixTeamState(sessionId);
+    const pidDir = path.join(tmp, ".omcp", "state", "team", sessionId);
+    writePidFile(pidDir, 1, 60501);
+    seedVerifyReport(pidDir, 1, { biome: true });
+    seedVerifyFailSummary(pidDir, sessionId, [{ index: 1, failedTools: ["biome"] }]);
+
+    const result = spawnFixWorker({
+      sessionId,
+      cwd: tmp,
+      spawnFn: makeFixSpawn(undefined, []),
+    });
+
+    expect(result.pid).toBeUndefined();
+    expect(fs.existsSync(result.pidPath)).toBe(false);
+    // fix_loop_count still incremented (intent honored even if spawn was nominal).
+    expect(result.fixLoopCount).toBe(1);
   });
 });
