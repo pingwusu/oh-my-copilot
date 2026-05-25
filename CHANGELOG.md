@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-05-25
+
+### Notable — EB-omcp-parity-06 IPC mesh revival: outbox + inbox + heartbeat + cursor
+
+This version revives the 6 Phase 2 IPC mesh stories that v2.1
+explicitly deferred behind `EB-omcp-parity-06`. Triggered by **maintainer
+override** of the self-imposed "≥1 external user signal" gate; documented
+as a one-time scope-of-acceptance in
+`docs/adr/ADR-omcp-eb-06-ipc-mesh-revival.md` (the master decision
+record). Pattern NOT to be reused for other EB gates without similar
+explicit reasoning.
+
+Tests: 1663 baseline → **~1771 passing** (~+108 net deterministic
+vitest cases on the default lane) + ~30s of 8-process
+`child_process.spawn` concurrency tests on the new dedicated
+`test-concurrent` CI lane (gated by `OMCP_RUN_HEAVY_CONCURRENCY=1`).
+
+### Added — Phase 2 IPC mesh (EB-06 revival, 7 functional stories)
+
+- **`omcp team-outbox-write <session-id> <consumer> <json-payload>`**
+  Appends a JSONL entry to the per-session outbox via a hand-rolled
+  lockfile sidecar (`openSync(<file>.lock, 'wx')` + exponential
+  backoff `[50, 100, 200, 400, 1000, 2500]` ms + 30s stale-cleanup).
+  64KB line cap with `{truncated: true, original_bytes: N}` markers
+  on truncation. Exit codes 0 / 2 / 4 per `ADR-omcp-eb-02-outbox-schema.md`.
+- **`omcp team-outbox-read <session-id> <consumer> [--reset] [--json]`**
+  Cursor-based reader with `{fileIndex, byteOffset}` shape per
+  consumer. Trailing partial line tolerance (ADR §5 — cursor advances
+  only past last completed `\n`; partial line picked up on next read
+  once writer completes it). Per-consumer cursors are independent.
+- **`omcp team-inbox-write <session-id> <markdown-body>`**
+  Leader→worker message channel. Appends to `inbox-N.md` with 1MB
+  rotation INSIDE each append (env override
+  `OMCP_INBOX_ROTATE_BYTES`). Shares the outbox lockfile pattern.
+- **`omcp team-heartbeat <session-id> <worker-index>`**
+  Per-worker liveness signal. Writes
+  `worker-<idx>-heartbeat.json` via atomicWriteFileSync with schema
+  `{ts: ISO-8601, workerIndex, pid}` per
+  `ADR-omcp-eb-05-heartbeat-freshness.md`. Default interval 30s,
+  freshness multiplier 3× = 90s threshold. Tunable via env
+  `OMCP_HEARTBEAT_INTERVAL_S` + `OMCP_HEARTBEAT_FRESHNESS_MULTIPLIER`.
+- **`runTeamWatchdog` watchdog extended**: reads heartbeat.json's
+  `ts` field as primary freshness signal (side-steps NTFS 15.625ms
+  mtime quantum race); falls back to shard-mtime ONLY when
+  heartbeat.json absent (back-compat with v2.1 workers). Heartbeat-
+  absent observability: surfaces `[omcp watchdog] worker-N not
+  heartbeating` warning to logLines at 2× post-spawn interval —
+  warning, NOT failure.
+- **`skills/team-worker/SKILL.md` updated** with heartbeat + outbox
+  + inbox protocol + anti-patterns section (no hot-loop heartbeat;
+  no inner-loop outbox-write without rate-limit; no shared cursor
+  across consumers; no >64KB lines — use sentinel file pointer
+  instead).
+
+### Added — CI runtime infrastructure (1 wiring story)
+
+- **New `test:concurrent` npm script + `.github/workflows/ci.yml`
+  matrix job** on windows-latest + Node 20 with
+  `OMCP_RUN_HEAVY_CONCURRENCY=1`. Per-test `it.skipIf(!env)` gates
+  ensure default `test` lane stays under 5 min; concurrent lane
+  adds ~3 min for the 8-process tests. Excludes match the default
+  lane verbatim.
+
+### Added — Deterministic smoke + tag-gate
+
+- **`docs/smoke/omcp-team-parity/ipc-mesh-deterministic-attestation.md`**
+  via shared `src/lib/smoke-template.ts` renderer (drift-detection
+  vitest now spans 4 consumers: P1 + P3 + P4 + IPC).
+- **`src/scripts/check-live-smoke.ts` extended** to recognize the
+  IPC phase as a candidate live-smoke artifact (per `ADR-omcp-eb-06-
+  ipc-mesh-revival.md` follow-up §4). Tag-gate message updated:
+  `BLOCKED — v2.x LOCAL tag blocked: ≥1 live-smoke required — capture
+  P1, P3, P4, or IPC with real Copilot CLI auth`.
+
+### Added — 3 ADRs
+
+- **`ADR-omcp-eb-02-outbox-schema.md`**: outbox JSONL schema
+  (`{ts, consumer, payload}`), 64KB line cap with truncation
+  markers, hand-rolled lockfile contract, alternatives
+  considered (separate-file-per-message rejected for cursor-
+  schema incompat + inode exhaustion; per-line-rewrite rejected
+  for data loss on concurrent appenders; `proper-lockfile` dep
+  rejected for zero-dep policy).
+- **`ADR-omcp-eb-05-heartbeat-freshness.md`**: 30s interval × 3
+  multiplier = 90s threshold; primary freshness signal is
+  heartbeat.json's `ts` field (NOT mtime — side-steps NTFS
+  quantum); watchdog precedence rule (heartbeat wins when both
+  signals present); heartbeat-absent observability warning at
+  2× interval; omc calibration reference (omc: 3s poll × 10×
+  = 30s vs omcp: 30s interval × 3× = 90s — different cadence
+  justification documented).
+- **`ADR-omcp-eb-06-ipc-mesh-revival.md`**: master decision record
+  for the EB-06 arc. Gate-trigger interpretation (maintainer
+  override; pattern NOT to be reused); decision (Option B-revised
+  chosen via iter-1+iter-2 RALPLAN-DR consensus); 3 top-level
+  drivers; 3 alternatives considered; consequences visible to
+  users/operators/maintainers; 8 follow-ups.
+
+### Smoke artifacts on disk after this release
+
+- `docs/smoke/omcp-team-parity/phase1-verify-fix-loop-deterministic-attestation.md` (v2.1)
+- `docs/smoke/omcp-team-parity/phase3-chain-deterministic-attestation.md` (v2.1)
+- `docs/smoke/omcp-team-parity/phase4-integration-deterministic-attestation.md` (v2.1)
+- `docs/smoke/omcp-team-parity/ipc-mesh-deterministic-attestation.md` (v2.2 — new)
+
+Live-mode tag-gate (S4 contract) still requires ≥1 real-Copilot
+artifact across any of P1 / P3 / P4 / IPC before the v2.2.0 LOCAL
+tag cuts. `npm run release -- 2.2.0` invokes
+`check-live-smoke.ts` which exits 1 with
+`v2.x LOCAL tag blocked` until live capture lands.
+
 ## [2.1.0] — 2026-05-25
 
 ### Notable — omc-team feature parity (Option B-minus): verify/fix loop + chain orchestration + worker-status atomic-rewrite

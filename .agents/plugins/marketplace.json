@@ -14,7 +14,7 @@
         "repo": "TBD/oh-my-copilot",
         "subdirectory": "."
       },
-      "version": "2.1.0",
+      "version": "2.2.0",
       "tags": [
         "orchestration",
         "multi-agent",
