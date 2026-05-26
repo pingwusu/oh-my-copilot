@@ -59,6 +59,10 @@ import {
 } from "./commands/team-verify.js";
 import { runTeamWait } from "./commands/team-wait.js";
 import { runTeamWaitReceiptCli } from "./commands/team-wait-receipt.js";
+import {
+  runTeamEventAppendCli,
+  runTeamEventTailCli,
+} from "./commands/team-event.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
 import {
   runTeamOutboxReadCli,
@@ -511,6 +515,83 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         process.exitCode = runTeamWaitReceiptCli(sessionId, requestId, {
           timeoutMs: opts.timeoutMs,
           pollMs: opts.pollMs,
+        });
+      },
+    );
+
+  // RG-04a: event log verbs + ts validation
+  program
+    .command("team-event-append <session-id>")
+    .description(
+      "RG-04a: append structured event to .omcp/state/team/<sid>/events.jsonl. Per-stream lockfile + 1MB rotation. Records carry producer_fork=omcp-r2. ts validated within (now - 24h, now + 5min); poison records get sentinel kind=poison-record-detected (PM-G recursion guard). Exit 0/2/4/5/1.",
+    )
+    .requiredOption(
+      "--verb <name>",
+      "verb that produced this event (e.g. team-outbox-write)",
+    )
+    .requiredOption("--kind <type>", "event kind/type (e.g. entry, exit, ack, error)")
+    .option("--actor <id>", "actor identifier (default 'unknown')")
+    .option("--shard <id>", "optional shard identifier")
+    .option("--request-id <uuidv4>", "optional dispatch request id tied to RG-01")
+    .option("--detail <json>", "optional JSON-encoded detail payload")
+    .action(
+      (
+        sessionId: string,
+        opts: {
+          verb: string;
+          kind: string;
+          actor?: string;
+          shard?: string;
+          requestId?: string;
+          detail?: string;
+        },
+      ) => {
+        let detail: unknown;
+        if (opts.detail !== undefined) {
+          try {
+            detail = JSON.parse(opts.detail);
+          } catch {
+            console.error(
+              `omcp team-event-append: --detail must be valid JSON (got: ${opts.detail})`,
+            );
+            process.exitCode = 2;
+            return;
+          }
+        }
+        process.exitCode = runTeamEventAppendCli(sessionId, {
+          verb: opts.verb,
+          kind: opts.kind,
+          actor: opts.actor,
+          shard: opts.shard,
+          requestId: opts.requestId,
+          detail,
+        });
+      },
+    );
+
+  program
+    .command("team-event-tail <session-id>")
+    .description(
+      "RG-04a: tail events.jsonl with optional filters. Skips poison records (ts out of window) + emits sentinel to break PM-G recursion.",
+    )
+    .option("--since <iso-ts>", "ISO-8601 lower bound (lexicographic compare)")
+    .option("--type <kind>", "exact event-kind filter")
+    .option(
+      "--limit <n>",
+      "max records returned; default 100, clamped to 10000",
+      (v) => Number(v),
+    )
+    .option("--json", "emit JSON instead of human-readable summary")
+    .action(
+      (
+        sessionId: string,
+        opts: { since?: string; type?: string; limit?: number; json?: boolean },
+      ) => {
+        process.exitCode = runTeamEventTailCli(sessionId, {
+          since: opts.since,
+          type: opts.type,
+          limit: opts.limit,
+          json: opts.json,
         });
       },
     );
