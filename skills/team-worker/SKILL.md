@@ -47,6 +47,22 @@ this document entirely.
    The cursor advances per-consumer so each worker has its own independent
    read pointer. Use `--json` for machine-readable parsing inside scripts.
 
+   **Priority-mailbox push poll (v2.3 RG-02)**: between major work
+   checkpoints, also drain your per-worker priority mailbox shard at
+   `.omcp/state/team/$OMCP_TEAM_SESSION_ID/worker-$OMCP_TEAM_WORKER_INDEX-push.jsonl`.
+   The leader writes high-priority prompts there via
+   `omcp team-push-prompt --worker $OMCP_TEAM_WORKER_INDEX --prompt "..."`
+   (Hybrid B-prime; ADR-RG-02). Each push record is one JSONL line with
+   shape `{ts, worker_index, prompt, producer_fork:"omcp-r2", priority:"push"}`.
+   Drain priority records BEFORE you process normal-inbox entries.
+
+   **Push poll cadence**: 500ms is the SLA target between checkpoints — do
+   NOT shorten it to a tight inner-loop polling rate (see anti-pattern
+   below). The leader treats >90s of heartbeat staleness as worker-dead
+   and routes pushes to `dead-letter-push.jsonl` instead of your shard,
+   so keeping your heartbeat fresh (per the cadence rules above) is what
+   keeps the push channel open.
+
 2. **Work**: Execute the task using available file and shell tools.
    Do not spawn sub-agents or delegate. Work directly.
 
@@ -145,3 +161,11 @@ postmortem inspection.
   a large object, write a sentinel pointer to a file under
   `.omcp/state/team/<sid>/` instead and reference its path in the
   outbox entry.
+- **Do NOT busy-loop the priority-mailbox push shard (RG-02).** The
+  push-shard file at `worker-<idx>-push.jsonl` is a *between-checkpoint*
+  drain, not a hot poll. Reading it more than ~2 times per second
+  (>500ms cadence) burns CPU + saturates the shard's per-stream lockfile
+  with no functional gain — the leader-side SLA is already 500ms p95.
+  Drain push records at the same checkpoints where you call
+  `omcp team-outbox-read` (typically: after completing a task, before
+  picking up the next one, on each Stop event).

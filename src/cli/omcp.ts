@@ -68,6 +68,7 @@ import {
   runTeamConflictReadCli,
   runTeamConflictWriteCli,
 } from "./commands/team-conflict.js";
+import { runTeamPushPromptCli } from "./commands/team-push-prompt.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
 import {
   runTeamOutboxReadCli,
@@ -675,6 +676,16 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
         });
       },
     );
+
+  // RG-02: priority-mailbox push (Hybrid B-prime) + heartbeat-freshness gate
+  program
+    .command("team-push-prompt <session-id> <worker-index> <prompt>")
+    .description(
+      "RG-02: push a priority prompt to a per-worker mailbox shard at .omcp/state/team/<sid>/worker-<idx>-push.jsonl. Worker SKILL polls at 500ms cadence. Heartbeat-freshness gate: stale worker (>90s) routes to dead-letter-push.jsonl + exit 5 (PM-D). NO --via stdin (architect A1 rejected Windows named-pipe). Records carry producer_fork=omcp-r2. Exit 0/2/4/5/1.",
+    )
+    .action((sessionId: string, workerIndex: string, prompt: string) => {
+      process.exitCode = runTeamPushPromptCli(sessionId, workerIndex, prompt);
+    });
 
   program
     .command("team-collect <session-id>")

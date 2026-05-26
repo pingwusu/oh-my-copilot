@@ -50,7 +50,14 @@ if (process.platform !== "win32") {
 }
 
 const PATH_SEP = process.platform === "win32" ? ";" : ":";
-const workerPath = SCRATCH + PATH_SEP + (process.env.PATH ?? "");
+// Force the DETACHED spawn branch in team.ts (the one this harness is meant
+// to test) by removing tmux from PATH. Without this, team.ts takes the tmux
+// branch on Windows which doesn't exercise the detached-spawn fix.
+const filteredHostPath = (process.env.PATH ?? "")
+  .split(PATH_SEP)
+  .filter((dir) => !dir.toLowerCase().includes("tmux") && !dir.toLowerCase().includes("winget\\links"))
+  .join(PATH_SEP);
+const workerPath = SCRATCH + PATH_SEP + filteredHostPath;
 
 const trace = [];
 const start = Date.now();
@@ -75,7 +82,12 @@ const TASK =
   "Constraints: do NOT modify any other files. Do NOT spawn sub-agents. Do NOT explore the filesystem. " +
   "Exit as soon as the ack returns.";
 
-const spawnRes = spawnSync(process.execPath, [OMCP_CLI, "team", `${WORKER_COUNT}:executor`, TASK], {
+// Spawn without `--agent` (use spec `N` not `N:executor`). The bare agent
+// name `executor` does NOT exist in the installed Copilot CLI plugin —
+// available agents are namespaced as `oh-my-claudecode:executor` etc.
+// parseTeamSpec rejects colons in the agent slug, so we drop the agent
+// spec entirely and let workers run as the default Copilot agent.
+const spawnRes = spawnSync(process.execPath, [OMCP_CLI, "team", `${WORKER_COUNT}`, TASK], {
   cwd: SCRATCH,
   encoding: "utf8",
   timeout: 30_000,
@@ -155,13 +167,35 @@ let finalState = null;
 let collectInfo = "(not called — pre-conditions not met)";
 let statusCheck = "(not run)";
 if (ackFiles.length === WORKER_COUNT) {
+  // Pre-collect: kill worker processes so runTeamCollect sees them as
+  // dead. Without this, Copilot processes may linger post-task-completion
+  // (they wrote evidence + ack but the process hasn't fully exited yet),
+  // and runTeamCollect's isAlive(pid) check leaves the phase at
+  // 'executing'. v1.6 worker semantics: ack means "task done"; the
+  // process exit follows shortly after.
+  for (const pidFile of pidFiles) {
+    try {
+      const pid = Number(readFileSync(join(teamDir, pidFile), "utf8").trim());
+      if (Number.isFinite(pid) && pid > 0) {
+        if (process.platform === "win32") {
+          spawnSync("taskkill", ["/PID", String(pid), "/F"], { stdio: "ignore" });
+        } else {
+          try { process.kill(pid, "SIGTERM"); } catch {}
+        }
+      }
+    } catch {}
+  }
+  // Brief settle window so Windows OS recognizes the kill.
+  await new Promise((r) => setTimeout(r, 2_000));
+  trace.push(`phaseD: pre-collect SIGTERM sent to ${pidFiles.length} worker pid(s); 2s settle`);
+
   try {
     const { runTeamCollect } = await import("../dist/cli/commands/team-phase-controller.js");
     const prevCwd = process.cwd();
     process.chdir(SCRATCH);
     try {
       const collectRes = runTeamCollect(SID);
-      collectInfo = `transitioned to '${collectRes.transitionedTo ?? collectRes.currentPhase}'; merged shards=${collectRes.mergeReport?.merged ?? "?"}`;
+      collectInfo = `finalPhase='${collectRes.finalPhase}'; allShardsPresent=${collectRes.allShardsPresent}; hasDeadWithoutShard=${collectRes.hasDeadWithoutShard}`;
       trace.push(`phaseD: runTeamCollect ${collectInfo}`);
     } finally {
       process.chdir(prevCwd);
