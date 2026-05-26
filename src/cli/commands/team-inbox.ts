@@ -34,6 +34,7 @@ import {
   assertSafeSlug,
   UnsafeSlugError,
 } from "../../runtime/safe-slug.js";
+import { appendEventBestEffort } from "./team-event.js";
 
 // ─── constants ────────────────────────────────────────────────────────────────
 
@@ -103,6 +104,15 @@ export function runTeamInboxWrite(
   } catch {
     return { exitCode: 2, rotated: false, retries: 0, staleLockfileRemoved: false };
   }
+
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-inbox-write",
+    kind: "entry",
+    actor: "team-inbox-write",
+    cwd: opts.cwd,
+  });
 
   const cwd = opts.cwd ?? process.cwd();
   const sleep = opts.sleep ?? defaultBusyWait;
@@ -189,6 +199,16 @@ export function runTeamInboxWrite(
       // best-effort
     }
   }
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-inbox-write",
+    kind: "exit",
+    actor: "team-inbox-write",
+    cwd: opts.cwd,
+    detail: { exitCode: 0, fileIndex, rotated, retries },
+  });
 
   return {
     exitCode: 0,
