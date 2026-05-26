@@ -58,6 +58,7 @@ import {
   resolveHeartbeatFreshnessMs,
   type HeartbeatPayload,
 } from "./team-heartbeat.js";
+import { appendEventBestEffort } from "./team-event.js";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
@@ -152,6 +153,15 @@ export function runTeamPushPrompt(
     };
   }
 
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-push-prompt",
+    kind: "entry",
+    actor: `worker-${opts.workerIndex}`,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const now = opts.now ?? (() => new Date().toISOString());
   const nowMs = opts.nowMs ?? Date.now;
@@ -218,6 +228,17 @@ export function runTeamPushPrompt(
       staleLockfileRemoved: result.staleLockfileRemoved,
     };
   }
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-push-prompt",
+    kind: "exit",
+    actor: `worker-${opts.workerIndex}`,
+    cwd: opts.cwd,
+    detail: { exitCode: 0, retries: result.retries },
+  });
+
   return {
     exitCode: 0,
     pushPath,
