@@ -21,6 +21,7 @@ import {
   assertSafeSlug,
   UnsafeSlugError,
 } from "../../runtime/safe-slug.js";
+import { appendEventBestEffort } from "./team-event.js";
 
 // ─── constants pinned by ADR-EB-05 ───────────────────────────────────────────
 
@@ -148,6 +149,15 @@ export function runTeamHeartbeat(
     return { exitCode: 2 };
   }
 
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-heartbeat",
+    kind: "entry",
+    actor: `worker-${opts.workerIndex}`,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const pidDir = join(cwd, ".omcp", "state", "team", opts.sessionId);
   mkdirSync(pidDir, { recursive: true });
@@ -165,6 +175,16 @@ export function runTeamHeartbeat(
   } catch {
     return { exitCode: 1, heartbeatPath, ts };
   }
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-heartbeat",
+    kind: "exit",
+    actor: `worker-${opts.workerIndex}`,
+    cwd: opts.cwd,
+    detail: { exitCode: 0, ts },
+  });
 
   return { exitCode: 0, heartbeatPath, ts };
 }
