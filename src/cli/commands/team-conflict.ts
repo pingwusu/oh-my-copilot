@@ -65,6 +65,7 @@ import {
   acquirePerStreamLock,
 } from "../../runtime/per-stream-lock.js";
 import { PRODUCER_FORK_ID, isValidUuidV4 } from "./team-outbox.js";
+import { appendEventBestEffort } from "./team-event.js";
 
 // ─── constants ───────────────────────────────────────────────────────────────
 
@@ -195,6 +196,16 @@ export function runTeamConflictWrite(
     };
   }
 
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-conflict-write",
+    kind: "entry",
+    actor: opts.workerId,
+    shard: opts.shard,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const now = opts.now ?? (() => new Date().toISOString());
   const rotateBytes = opts.rotateBytes ?? CONFLICT_ROTATE_BYTES;
@@ -268,6 +279,17 @@ export function runTeamConflictWrite(
     lock.release();
   }
 
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-conflict-write",
+    kind: "exit",
+    actor: opts.workerId,
+    shard: opts.shard,
+    cwd: opts.cwd,
+    detail: { exitCode: 0, conflictId, rotated },
+  });
+
   return {
     exitCode: 0,
     conflictId,
@@ -333,6 +355,16 @@ export function runTeamConflictRead(
     };
   }
 
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-conflict-read",
+    kind: "entry",
+    actor: "team-conflict-read",
+    shard: opts.shard,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const dir = conflictsDir(cwd, opts.sessionId);
   const includeAcked = opts.includeAcked === true;
@@ -346,7 +378,18 @@ export function runTeamConflictRead(
     parseErrors: [],
   };
 
-  if (!existsSync(dir)) return result;
+  if (!existsSync(dir)) {
+    appendEventBestEffort({
+      sessionId: opts.sessionId,
+      verb: "team-conflict-read",
+      kind: "exit",
+      actor: "team-conflict-read",
+      shard: opts.shard,
+      cwd: opts.cwd,
+      detail: { exitCode: 0, conflicts: 0 },
+    });
+    return result;
+  }
 
   // Determine target shards.
   const shards: string[] = [];
@@ -400,6 +443,17 @@ export function runTeamConflictRead(
       }
     }
   }
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-conflict-read",
+    kind: "exit",
+    actor: "team-conflict-read",
+    shard: opts.shard,
+    cwd: opts.cwd,
+    detail: { exitCode: 0, conflicts: result.conflicts.length, acks: result.acks.length },
+  });
 
   return result;
 }
@@ -513,6 +567,16 @@ export function runTeamConflictAck(
     return { exitCode: 2, retries: 0, staleLockfileRemoved: false };
   }
 
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-conflict-ack",
+    kind: "entry",
+    actor: opts.ackedBy ?? "operator",
+    shard: opts.shard,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const now = opts.now ?? (() => new Date().toISOString());
   const ackedBy = opts.ackedBy ?? "operator";
@@ -559,6 +623,17 @@ export function runTeamConflictAck(
   } finally {
     lock.release();
   }
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-conflict-ack",
+    kind: "exit",
+    actor: ackedBy,
+    shard: opts.shard,
+    cwd: opts.cwd,
+    detail: { exitCode: 0, conflictId: opts.conflictId },
+  });
 
   return {
     exitCode: 0,
