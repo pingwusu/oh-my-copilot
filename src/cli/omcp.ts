@@ -58,6 +58,7 @@ import {
   runTeamVerifyCli,
 } from "./commands/team-verify.js";
 import { runTeamWait } from "./commands/team-wait.js";
+import { runTeamWaitReceiptCli } from "./commands/team-wait-receipt.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
 import {
   runTeamOutboxReadCli,
@@ -324,16 +325,25 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   program
     .command("team-ack <session-id> <worker-index>")
     .description(
-      "Write worker-side shutdown ack — call when shutdown-request.json is detected (L2.7 protocol). v2.1 N+2: --status pending|in_progress|completed|failed updates TeamState.workers[K].status atomically.",
+      "Write worker-side shutdown ack — call when shutdown-request.json is detected (L2.7 protocol). v2.1 N+2: --status pending|in_progress|completed|failed updates TeamState.workers[K].status atomically. RG-01: --request-id <uuidv4> embeds the receipt id + producer_fork so the dispatching leader's team-wait-receipt can match this ack.",
     )
     .option(
       "--status <state>",
       "update TeamState.workers[K].status (pending | in_progress | completed | failed)",
     )
+    .option(
+      "--request-id <uuidv4>",
+      "RG-01 receipt id (UUIDv4) the leader supplied via team-outbox-write --request-id; embedded in the ack JSON with producer_fork=omcp-r2",
+    )
     .action(
-      (sessionId: string, workerIndex: string, opts: { status?: string }) => {
+      (
+        sessionId: string,
+        workerIndex: string,
+        opts: { status?: string; requestId?: string },
+      ) => {
         process.exitCode = runTeamAckCli(sessionId, workerIndex, {
           status: opts.status,
+          requestId: opts.requestId,
         });
       },
     );
@@ -396,14 +406,24 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
   program
     .command("team-outbox-write <session-id> <consumer> <json-payload>")
     .description(
-      "Append a JSONL entry to the per-session outbox (EB-06 IPC mesh). Uses a hand-rolled lockfile sidecar + exponential backoff + 30s stale-lockfile cleanup. Line cap 64KB. Exit 0/2/4 per ADR-omcp-eb-02.",
+      "Append a JSONL entry to the per-session outbox (EB-06 IPC mesh). Uses a hand-rolled lockfile sidecar + exponential backoff + 30s stale-lockfile cleanup. Line cap 64KB. Exit 0/2/4 per ADR-omcp-eb-02. RG-01: --request-id <uuidv4> embeds the receipt id + producer_fork=omcp-r2 so workers can echo it in their ack and team-wait-receipt can match.",
+    )
+    .option(
+      "--request-id <uuidv4>",
+      "RG-01 dispatch request id (UUIDv4). When set, the outbox line carries dispatch_request_id + producer_fork=omcp-r2 for receipt-tracking.",
     )
     .action(
-      (sessionId: string, consumer: string, jsonPayload: string) => {
+      (
+        sessionId: string,
+        consumer: string,
+        jsonPayload: string,
+        opts: { requestId?: string },
+      ) => {
         process.exitCode = runTeamOutboxWriteCli(
           sessionId,
           consumer,
           jsonPayload,
+          { dispatchRequestId: opts.requestId },
         );
       },
     );
@@ -466,6 +486,34 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           : undefined;
       process.exitCode = runTeamWait({ sessionId, timeoutMs });
     });
+
+  program
+    .command("team-wait-receipt <session-id> <request-id>")
+    .description(
+      "Block until a worker emits an ack record matching <request-id> (UUIDv4) AND producer_fork=omcp-r2 (RG-01 / ADR-RG-01). Idempotent under SIGTERM-then-retry via consumed-receipts.jsonl. Exit codes: 0 receipt observed (or cache hit), 2 invalid argv, 3 timeout, 1 other error.",
+    )
+    .option(
+      "--timeout-ms <ms>",
+      "wall-clock timeout in milliseconds (default 1800000 = 30min, matches TEAM_WAIT_DEFAULT_TIMEOUT_MS)",
+      (v) => Number(v),
+    )
+    .option(
+      "--poll-ms <ms>",
+      "poll interval in milliseconds (default 2000, matches TEAM_WAIT_POLL_INTERVAL_MS)",
+      (v) => Number(v),
+    )
+    .action(
+      (
+        sessionId: string,
+        requestId: string,
+        opts: { timeoutMs?: number; pollMs?: number },
+      ) => {
+        process.exitCode = runTeamWaitReceiptCli(sessionId, requestId, {
+          timeoutMs: opts.timeoutMs,
+          pollMs: opts.pollMs,
+        });
+      },
+    );
 
   program
     .command("team-collect <session-id>")

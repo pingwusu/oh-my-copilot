@@ -58,6 +58,29 @@ export const OUTBOX_LOCK_BACKOFF_MS = [
 
 // ─── types ──────────────────────────────────────────────────────────────────
 
+/**
+ * Fork identifier embedded on every outbox + ack record so cross-fork
+ * coexistence does not produce ambiguous attribution. Both pingwusu and
+ * RobinNorberg forks emit UUIDv4 via crypto.randomUUID, so the request_id
+ * format alone cannot distinguish whose record it is — producer_fork does.
+ *
+ * Readers MUST match producer_fork on receipt lookup to avoid false-positive
+ * matches against a co-located other-fork ack stream (RG-01 / ADR-RG-01).
+ */
+export const PRODUCER_FORK_ID = "omcp-r2";
+
+/**
+ * UUIDv4 format guard used to validate dispatch_request_id supplied via CLI
+ * (--request-id) or programmatic call sites. RG-01 / ADR-RG-01: receipts are
+ * matched on UUIDv4 + producer_fork pair; rejecting malformed IDs at the
+ * boundary keeps the consumed-receipts.jsonl stream uniform-shape.
+ */
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export function isValidUuidV4(value: unknown): value is string {
+  return typeof value === "string" && UUID_V4_RE.test(value);
+}
+
 export interface OutboxLineEntry {
   ts: string;
   consumer: string;
@@ -66,6 +89,17 @@ export interface OutboxLineEntry {
   truncated?: true;
   /** Present only with truncated:true — original Buffer.byteLength before truncation. */
   original_bytes?: number;
+  /**
+   * Optional dispatch request ID (UUIDv4) for receipt-tracked messages.
+   * Workers echo this back in their ack record; team-wait-receipt polls
+   * the ack stream for a matching record_id. RG-01 / ADR-RG-01.
+   */
+  dispatch_request_id?: string;
+  /**
+   * Optional fork identifier (PRODUCER_FORK_ID = "omcp-r2"). Required match
+   * on the reader side to disambiguate co-located other-fork records.
+   */
+  producer_fork?: string;
 }
 
 export interface RunTeamOutboxWriteOpts {
@@ -82,6 +116,13 @@ export interface RunTeamOutboxWriteOpts {
   backoffMs?: readonly number[];
   /** Test hook: override stale-lock threshold (default OUTBOX_STALE_LOCK_MS). */
   staleLockMs?: number;
+  /**
+   * Optional UUIDv4 dispatch request ID. When set, the outbox line carries
+   * this field so the receiving worker can echo it back in their ack record
+   * for receipt-tracking (RG-01 / team-wait-receipt). Omit for fire-and-
+   * forget writes (legacy behavior — backwards compatible).
+   */
+  dispatchRequestId?: string;
 }
 
 export interface RunTeamOutboxWriteResult {
@@ -135,6 +176,14 @@ export function runTeamOutboxWrite(
     consumer: opts.consumer,
     payload: opts.payload,
   };
+  // RG-01: receipt-tracked dispatch. When the caller supplies a request ID,
+  // embed it + the producer_fork stamp on the outbox line so receivers can
+  // round-trip it back in their ack record and team-wait-receipt can match
+  // on the (request_id, producer_fork) pair.
+  if (opts.dispatchRequestId) {
+    fullEntry.dispatch_request_id = opts.dispatchRequestId;
+    fullEntry.producer_fork = PRODUCER_FORK_ID;
+  }
   const { line, truncated, originalBytes } = serializeLineWithCap(fullEntry);
 
   // Acquire lockfile via exponential backoff.
@@ -329,6 +378,12 @@ export interface RunTeamOutboxWriteCliOpts {
   cwd?: string;
   log?: (line: string) => void;
   errLog?: (line: string) => void;
+  /**
+   * Optional UUIDv4 dispatch request ID. When set on the CLI invocation
+   * (--request-id flag), the outbox line carries the receipt-tracking
+   * fields per RG-01.
+   */
+  dispatchRequestId?: string;
 }
 
 /**
@@ -367,11 +422,20 @@ export function runTeamOutboxWriteCli(
     return 2;
   }
 
+  // RG-01: validate optional UUIDv4 dispatch_request_id when supplied.
+  if (opts.dispatchRequestId !== undefined && !isValidUuidV4(opts.dispatchRequestId)) {
+    errLog(
+      `omcp team-outbox-write: --request-id must be UUIDv4 (got: ${opts.dispatchRequestId})`,
+    );
+    return 2;
+  }
+
   const result = runTeamOutboxWrite({
     sessionId,
     consumer,
     payload,
     cwd: opts.cwd,
+    dispatchRequestId: opts.dispatchRequestId,
   });
 
   if (result.exitCode === 0) {

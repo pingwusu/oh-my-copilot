@@ -21,6 +21,11 @@ import {
   writeModeState,
   type TeamState,
 } from "../../runtime/mode-state.js";
+import { PRODUCER_FORK_ID } from "./team-outbox.js";
+
+/** UUIDv4 format guard (RG-01) — duplicated from team-outbox to avoid cycle. */
+const UUID_V4_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type WorkerStatus = "pending" | "in_progress" | "completed" | "failed";
 
@@ -45,6 +50,13 @@ export interface TeamAckOptions {
   status?: WorkerStatus;
   /** Override working directory (default: process.cwd()). Test hook. */
   cwd?: string;
+  /**
+   * Optional UUIDv4 receipt id — the request_id this ack is responding to.
+   * Set by workers acknowledging a receipt-tracked outbox message so the
+   * dispatching leader's team-wait-receipt can match on the (request_id,
+   * producer_fork) pair. RG-01 / ADR-RG-01.
+   */
+  requestId?: string;
 }
 
 export interface TeamAckResult {
@@ -71,8 +83,16 @@ export interface TeamAckResult {
  * action) should catch and set process.exitCode = 2.
  */
 export function runTeamAck(opts: TeamAckOptions): TeamAckResult {
-  const { sessionId, workerIndex, status } = opts;
+  const { sessionId, workerIndex, status, requestId } = opts;
   const cwd = opts.cwd ?? process.cwd();
+
+  // RG-01: validate optional UUIDv4 request_id. Defense-in-depth — CLI
+  // wrapper validates too, but programmatic callers can skip that path.
+  if (requestId !== undefined && !UUID_V4_RE.test(requestId)) {
+    throw new Error(
+      `runTeamAck: requestId must be UUIDv4 (got: ${JSON.stringify(requestId)})`,
+    );
+  }
 
   // Defense-in-depth (Critic iter-1 of v1.2): even though runTeamAckCli already
   // validates sessionId, programmatic callers that skip the CLI wrapper must
@@ -128,6 +148,9 @@ export function runTeamAck(opts: TeamAckOptions): TeamAckResult {
         workerIndex,
         ackedAt,
         ...(statusUpdated ? { status: appliedStatus } : {}),
+        // RG-01: when a request_id was supplied, embed it + the
+        // producer_fork stamp so leader-side team-wait-receipt can match.
+        ...(requestId ? { request_id: requestId, producer_fork: PRODUCER_FORK_ID } : {}),
       },
       null,
       2,
@@ -153,7 +176,7 @@ export function runTeamAck(opts: TeamAckOptions): TeamAckResult {
 export function runTeamAckCli(
   sessionId: string,
   workerIndexStr: string,
-  opts: { cwd?: string; status?: string } = {},
+  opts: { cwd?: string; status?: string; requestId?: string } = {},
 ): number {
   // Validate session-id.
   try {
@@ -192,12 +215,21 @@ export function runTeamAckCli(
     status = opts.status;
   }
 
+  // RG-01: validate optional --request-id (UUIDv4) at CLI boundary.
+  if (opts.requestId !== undefined && !UUID_V4_RE.test(opts.requestId)) {
+    console.error(
+      `omcp team-ack: --request-id must be UUIDv4 (got: ${JSON.stringify(opts.requestId)})`,
+    );
+    return 2;
+  }
+
   try {
     const result = runTeamAck({
       sessionId,
       workerIndex,
       status,
       cwd: opts.cwd,
+      requestId: opts.requestId,
     });
     console.log(`omcp team-ack: wrote ${result.ackFile}`);
     console.log(`  ackedAt: ${result.ackedAt}`);
