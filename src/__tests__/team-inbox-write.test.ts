@@ -174,7 +174,9 @@ describe("runTeamInboxWrite — lockfile contention", () => {
   it("returns exit 4 when lockfile held for the entire backoff sequence", () => {
     mkdirAll();
     const lockPath = path.join(pidDir(), "inbox.lock");
-    fs.openSync(lockPath, "wx");
+    // Close fd immediately — the file persists (contenders see EEXIST);
+    // releasing the Windows handle prevents CI runner afterEach failures.
+    fs.closeSync(fs.openSync(lockPath, "wx"));
     const r = runTeamInboxWrite({
       sessionId: SESSION_ID,
       body: "x",
@@ -189,7 +191,7 @@ describe("runTeamInboxWrite — lockfile contention", () => {
   it("force-removes stale lockfile (>30s) and acquires", () => {
     mkdirAll();
     const lockPath = path.join(pidDir(), "inbox.lock");
-    fs.openSync(lockPath, "wx");
+    fs.closeSync(fs.openSync(lockPath, "wx"));
     const sixtySecondsAgo = new Date(Date.now() - 60_000);
     fs.utimesSync(lockPath, sixtySecondsAgo, sixtySecondsAgo);
     const r = runTeamInboxWrite({

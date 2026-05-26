@@ -252,8 +252,11 @@ describe("runTeamOutboxWrite — lockfile contention", () => {
     const pidDir = path.join(tmp, ".omcp", "state", "team", SESSION_ID);
     fs.mkdirSync(pidDir, { recursive: true });
     const lockPath = path.join(pidDir, "outbox.jsonl.lock");
-    // Hold the lockfile for the duration of the test — never released.
-    fs.openSync(lockPath, "wx");
+    // Pre-create the lockfile so contenders see EEXIST. Close the fd
+    // immediately — the FILE persists on disk (which is what other writers
+    // observe), but releasing the Windows handle prevents the afterEach
+    // rmSync from failing with ENOTEMPTY/EPERM on CI runners.
+    fs.closeSync(fs.openSync(lockPath, "wx"));
 
     const result = runTeamOutboxWrite({
       sessionId: SESSION_ID,
@@ -274,7 +277,10 @@ describe("runTeamOutboxWrite — lockfile contention", () => {
     const pidDir = path.join(tmp, ".omcp", "state", "team", SESSION_ID);
     fs.mkdirSync(pidDir, { recursive: true });
     const lockPath = path.join(pidDir, "outbox.jsonl.lock");
-    fs.openSync(lockPath, "wx");
+    // Close the fd immediately — on Windows NTFS a leaked handle blocks
+    // lstat (EPERM) and the afterEach rmSync (ENOTEMPTY). CI runners
+    // (which tear down processes more slowly than dev boxes) catch this.
+    fs.closeSync(fs.openSync(lockPath, "wx"));
     // Backdate the lockfile's mtime to 60s ago.
     const sixtySecondsAgo = new Date(Date.now() - 60_000);
     fs.utimesSync(lockPath, sixtySecondsAgo, sixtySecondsAgo);
@@ -298,7 +304,9 @@ describe("runTeamOutboxWrite — lockfile contention", () => {
     const pidDir = path.join(tmp, ".omcp", "state", "team", SESSION_ID);
     fs.mkdirSync(pidDir, { recursive: true });
     const lockPath = path.join(pidDir, "outbox.jsonl.lock");
-    fs.openSync(lockPath, "wx");
+    // Close fd immediately — see comment in the prior test about Windows
+    // NTFS handle-leak surfacing on CI runners as EPERM/ENOTEMPTY.
+    fs.closeSync(fs.openSync(lockPath, "wx"));
 
     const result = runTeamOutboxWrite({
       sessionId: SESSION_ID,
