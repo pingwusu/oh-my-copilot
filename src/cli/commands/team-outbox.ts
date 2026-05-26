@@ -40,8 +40,21 @@ export const OUTBOX_LINE_MAX_BYTES = 65_536;
 /** Lockfile age threshold (ms) — older locks are crash leftovers + force-removed. */
 export const OUTBOX_STALE_LOCK_MS = 30_000;
 
-/** Exponential backoff retry sequence for lockfile acquire (ms). */
-export const OUTBOX_LOCK_BACKOFF_MS = [50, 100, 200, 400, 1_000, 2_500] as const;
+/**
+ * Exponential backoff retry sequence for lockfile acquire (ms).
+ *
+ * Total: 19,250 ms (8 retries). Sized to handle 8-process contention on
+ * slow CI runners — the windows-latest GitHub Actions runner can spend
+ * 50-100ms per appendFileSync under load (vs ~1-5ms on a dev box), so
+ * 800 sequential acquisitions across 8 writers can need 30-60s of wall
+ * clock when contention is high. The 19.25s total covers the slowest
+ * writer's wait without false-positive exit-4 exhaustion errors.
+ *
+ * Previously [50, 100, 200, 400, 1000, 2500] (4.25s) — too tight for CI.
+ */
+export const OUTBOX_LOCK_BACKOFF_MS = [
+  50, 100, 200, 400, 1_000, 2_500, 5_000, 10_000,
+] as const;
 
 // ─── types ──────────────────────────────────────────────────────────────────
 

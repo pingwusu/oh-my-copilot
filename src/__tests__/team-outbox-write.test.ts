@@ -430,9 +430,11 @@ describe("ADR-EB-02 pinned constants", () => {
     expect(OUTBOX_STALE_LOCK_MS).toBe(30_000);
   });
 
-  it("backoff sequence is exactly [50, 100, 200, 400, 1000, 2500]", () => {
+  it("backoff sequence is exactly [50, 100, 200, 400, 1000, 2500, 5000, 10000]", () => {
+    // 8-retry sequence sized for CI runner load (total 19.25s). See
+    // team-outbox.ts OUTBOX_LOCK_BACKOFF_MS commentary for rationale.
     expect([...OUTBOX_LOCK_BACKOFF_MS]).toEqual([
-      50, 100, 200, 400, 1_000, 2_500,
+      50, 100, 200, 400, 1_000, 2_500, 5_000, 10_000,
     ]);
   });
 });
