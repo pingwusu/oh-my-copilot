@@ -10,11 +10,17 @@
 // Per-worker pidfiles are written to .omcp/state/team/<sessionId>/worker-K.pid
 // so that stopTeam can SIGTERM them on Ctrl+C.
 
-import { spawnSync } from "node:child_process";
-import { spawnCrossPlatform } from "../../runtime/resolve-executable.js";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import {
+  resolveExecutableOrName,
+  resolveNpmShimScript,
+  spawnCrossPlatform,
+} from "../../runtime/resolve-executable.js";
+import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   statSync,
@@ -126,15 +132,46 @@ export function runTeam(spec: TeamSpec, task: string): TeamLaunchReport {
     const workerIndex = i + 1;
     const args = ["-p", `${task} (worker ${workerIndex}/${spec.count})`, "--allow-all-tools"];
     if (spec.agent) args.push("--agent", spec.agent);
-    const child = spawnCrossPlatform("copilot", args, {
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...process.env,
-        OMCP_TEAM_SESSION_ID: sessionId,
-        OMCP_TEAM_WORKER_INDEX: String(workerIndex),
-      },
-    });
+    const workerEnv = {
+      ...process.env,
+      OMCP_TEAM_SESSION_ID: sessionId,
+      OMCP_TEAM_WORKER_INDEX: String(workerIndex),
+    };
+    // Per-worker log fd. Detached workers MUST have a real stdio target;
+    // `stdio: "ignore"` causes Copilot CLI's TUI renderer to fail silently
+    // on Windows when the .cmd wrapper is launched detached. Mirror the
+    // tmux-mode `tee` behavior by redirecting stdout+stderr to a per-worker
+    // log file. The log lives alongside other session artifacts so operators
+    // can inspect what each worker actually did.
+    const workerLog = join(logDir, `worker-${workerIndex}.log`);
+    const logFd = openSync(workerLog, "a");
+    // On Windows, additionally bypass the cmd.exe `.cmd` wrapper for any
+    // npm-installed CLI by resolving to its underlying node-script. When a
+    // .cmd shim is launched detached + with /dev/null stdio, even after the
+    // CVE-2024-27980 mitigation, cmd.exe spawns the worker but the child
+    // process loses its console + cannot complete its task. Direct
+    // `node <script.js>` spawn avoids this entirely.
+    const resolvedCopilot = resolveExecutableOrName("copilot");
+    const npmShim = resolveNpmShimScript(resolvedCopilot);
+    let child: ReturnType<typeof nodeSpawn>;
+    if (npmShim) {
+      child = nodeSpawn(process.execPath, [npmShim.scriptPath, ...args], {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: workerEnv,
+      });
+    } else {
+      child = spawnCrossPlatform("copilot", args, {
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+        env: workerEnv,
+      });
+    }
+    // Close parent's copy of the log fd — the child inherited a dup at
+    // spawn-time so its writes still land in the file. Matches the
+    // openSync/closeSync pairing convention used elsewhere in this codebase
+    // (doctor.ts:455, loop-watcher.ts:54, atomic-write.ts:33).
+    try { closeSync(logFd); } catch { /* best-effort */ }
     child.unref();
     if (child.pid !== undefined) {
       // Record the worker pid so stopTeam can SIGTERM it later.

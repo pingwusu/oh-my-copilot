@@ -27,7 +27,7 @@ import {
   type SpawnSyncOptions,
   type SpawnSyncReturns,
 } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { posix as pathPosix, win32 as pathWin32 } from "node:path";
 
 export interface FindExecutableOptions {
@@ -167,6 +167,71 @@ export interface SpawnCrossPlatformOptions extends SpawnOptions {
   spawn?: typeof nodeSpawn;
   platform?: NodeJS.Platform;
   resolved?: string;
+}
+
+/**
+ * Result of resolving an npm-installed Windows .cmd shim to its underlying
+ * node-script invocation.
+ *
+ * The npm shim format (from `npm` / `pnpm` / `yarn` install) is:
+ *
+ *     @ECHO off
+ *     ...
+ *     "%_prog%"  "%dp0%\node_modules\<package>\...js" %*
+ *
+ * where `%dp0%` is the .cmd's parent directory. This helper extracts the
+ * underlying `.js` path so callers can spawn it directly via Node, bypassing
+ * the cmd.exe wrapper. The reason this matters: on Windows, `cmd.exe /d /c
+ * "<.cmd>" args` + `detached:true` + `stdio:"ignore"` causes Copilot CLI
+ * (and other npm-installed CLIs that need a usable stdio for their TUI
+ * renderer) to fail silently because /dev/null isn't a usable target.
+ * Spawning the underlying node-script directly + redirecting stdio to a real
+ * file descriptor restores observable behavior.
+ *
+ * Returns null when the .cmd is not an npm shim (e.g. hand-written .cmd
+ * files or .bat scripts without the canonical shim pattern). Callers should
+ * fall back to the cmd.exe wrapper in that case.
+ */
+export interface NpmShimResolution {
+  /** Absolute path of the node script the shim ultimately invokes. */
+  scriptPath: string;
+}
+
+export function resolveNpmShimScript(
+  cmdPath: string,
+  opts: {
+    /** Test injection point. */
+    readFile?: (p: string) => string;
+    platform?: NodeJS.Platform;
+  } = {},
+): NpmShimResolution | null {
+  const platform = opts.platform ?? process.platform;
+  if (platform !== "win32") return null;
+  if (!/\.cmd$/i.test(cmdPath)) return null;
+
+  let body: string;
+  try {
+    const read = opts.readFile ?? ((p: string) => readFileSync(p, "utf8"));
+    body = read(cmdPath);
+  } catch {
+    return null;
+  }
+
+  // Match the canonical npm-shim final invocation line:
+  //   "%_prog%"  "%dp0%\path\to\script.js" %*
+  // The script path is %dp0%-relative (i.e. relative to the .cmd's dir).
+  // Tolerate any whitespace between the two quoted tokens. We DO NOT match
+  // arbitrary `node "<absolute>" args` — only the %dp0%-relative form npm
+  // shims emit, since absolute-path .cmd files cannot be resolved
+  // deterministically without executing them.
+  const match = body.match(/"%_prog%"\s+"%dp0%([\\\/].+?\.(?:c|m)?js)"/i);
+  if (!match) return null;
+  const cmdDir = pathWin32.dirname(cmdPath);
+  const scriptRelative = match[1].replace(/\\/g, pathWin32.sep);
+  // %dp0% includes a trailing backslash; the match captures from the
+  // separator onward, so just join with dirname.
+  const scriptPath = pathWin32.join(cmdDir, scriptRelative);
+  return { scriptPath };
 }
 
 /**

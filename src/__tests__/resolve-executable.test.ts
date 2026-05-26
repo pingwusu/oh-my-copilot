@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   findExecutable,
   resolveExecutableOrName,
+  resolveNpmShimScript,
   spawnCrossPlatform,
   spawnSyncCrossPlatform,
 } from "../runtime/resolve-executable.js";
@@ -248,5 +249,137 @@ describe("spawnCrossPlatform — async wrapper", () => {
     });
     const [cmd] = fakeSpawn.mock.calls[0];
     expect(cmd).toBe("/usr/bin/foo");
+  });
+});
+
+// resolveNpmShimScript: parses npm-shim .cmd files to extract the
+// underlying node-script path. Used by team.ts's detached spawn path to
+// bypass the cmd.exe wrapper on Windows, since /dev/null stdio + detached
+// causes Copilot CLI (and other npm-installed CLIs) to fail silently.
+describe("resolveNpmShimScript — npm .cmd shim parser", () => {
+  const CANONICAL_SHIM = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\\node.exe" (
+  SET "_prog=%dp0%\\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@github\\copilot\\npm-loader.js" %*
+`;
+
+  it("returns null on non-Windows platforms (POSIX has no .cmd shims)", () => {
+    const result = resolveNpmShimScript("/usr/bin/copilot", {
+      readFile: () => CANONICAL_SHIM,
+      platform: "linux",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when path does not end in .cmd", () => {
+    const result = resolveNpmShimScript("C:\\foo\\copilot.exe", {
+      readFile: () => CANONICAL_SHIM,
+      platform: "win32",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("extracts the npm-loader.js path from the canonical npm shim", () => {
+    const result = resolveNpmShimScript("C:\\.tools\\.npm-global\\copilot.cmd", {
+      readFile: () => CANONICAL_SHIM,
+      platform: "win32",
+    });
+    expect(result).not.toBeNull();
+    expect(result?.scriptPath).toBe(
+      "C:\\.tools\\.npm-global\\node_modules\\@github\\copilot\\npm-loader.js",
+    );
+  });
+
+  it("returns null on hand-written .cmd files lacking the npm-shim pattern", () => {
+    const handWritten = `@echo off\nrem just a regular batch file\necho hello\n`;
+    const result = resolveNpmShimScript("C:\\foo\\thing.cmd", {
+      readFile: () => handWritten,
+      platform: "win32",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when readFile throws (missing or unreadable shim)", () => {
+    const result = resolveNpmShimScript("C:\\nonexistent\\foo.cmd", {
+      readFile: () => {
+        throw new Error("ENOENT");
+      },
+      platform: "win32",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("handles forward-slash variants in the shim's %dp0% line", () => {
+    const fwdSlashShim = CANONICAL_SHIM.replace(
+      "%dp0%\\node_modules\\@github\\copilot\\npm-loader.js",
+      "%dp0%/node_modules/@github/copilot/npm-loader.js",
+    );
+    const result = resolveNpmShimScript("C:\\.tools\\.npm-global\\copilot.cmd", {
+      readFile: () => fwdSlashShim,
+      platform: "win32",
+    });
+    expect(result).not.toBeNull();
+    // path.win32.join normalizes forward slashes to backslashes
+    expect(result?.scriptPath).toBe(
+      "C:\\.tools\\.npm-global\\node_modules\\@github\\copilot\\npm-loader.js",
+    );
+  });
+
+  it("works for any npm-installed CLI, not just copilot (generic shim format)", () => {
+    const otherCliShim = CANONICAL_SHIM.replace(
+      "@github\\copilot\\npm-loader.js",
+      "vitest\\vitest.mjs",
+    );
+    const result = resolveNpmShimScript("C:\\.npm\\vitest.cmd", {
+      readFile: () => otherCliShim,
+      platform: "win32",
+    });
+    expect(result?.scriptPath).toBe("C:\\.npm\\node_modules\\vitest\\vitest.mjs");
+  });
+
+  it("matches .cjs script targets (CommonJS shim variant)", () => {
+    const cjsShim = CANONICAL_SHIM.replace(
+      "@github\\copilot\\npm-loader.js",
+      "some-pkg\\bin\\entry.cjs",
+    );
+    const result = resolveNpmShimScript("C:\\.npm\\some-cli.cmd", {
+      readFile: () => cjsShim,
+      platform: "win32",
+    });
+    expect(result?.scriptPath).toBe("C:\\.npm\\node_modules\\some-pkg\\bin\\entry.cjs");
+  });
+
+  it("default readFile (no injection) works in ESM contexts — regression for v2.2.x dist", async () => {
+    // Without an injected readFile, the helper falls back to fs.readFileSync.
+    // The prior implementation used `require("node:fs").readFileSync` which
+    // silently fails in ESM (require is undefined) → returns null → callers
+    // silently fall back to the broken cmd.exe wrapper path. This test pins
+    // the ESM-safe import of readFileSync at module top.
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tmp = mkdtempSync(join(tmpdir(), "shim-esm-"));
+    const cmdPath = join(tmp, "fake-cli.cmd");
+    writeFileSync(cmdPath, CANONICAL_SHIM, "utf8");
+    try {
+      const result = resolveNpmShimScript(cmdPath, { platform: "win32" });
+      expect(result).not.toBeNull();
+      expect(result?.scriptPath).toMatch(/npm-loader\.js$/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
