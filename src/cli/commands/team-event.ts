@@ -390,6 +390,27 @@ export function runTeamEventTail(
   };
 }
 
+// ─── RG-04b instrumentation helper ──────────────────────────────────────────
+
+/**
+ * Defensive wrapper around runTeamEventAppend used by RG-04b instrumentation
+ * patches in other verbs (team-outbox, team-inbox, team-heartbeat, team-conflict,
+ * team-push-prompt). Swallows EVERY error so a broken event-log pipeline cannot
+ * cause a parent verb to fail — instrumentation is purely additive observability
+ * (RG-04b principle: "DO NOT change verb behavior").
+ *
+ * Callers should pass {verb, kind, sessionId, ...} and ignore the return value.
+ * On any throw or non-zero exitCode from runTeamEventAppend, this helper returns
+ * silently with no side effects on the caller.
+ */
+export function appendEventBestEffort(opts: RunTeamEventAppendOpts): void {
+  try {
+    runTeamEventAppend(opts);
+  } catch {
+    // best-effort: instrumentation must never fail the parent verb
+  }
+}
+
 // ─── CLI wrappers ───────────────────────────────────────────────────────────
 
 export interface RunTeamEventAppendCliOpts {

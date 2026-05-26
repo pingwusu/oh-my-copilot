@@ -31,6 +31,7 @@ import {
   UnsafeSlugError,
 } from "../../runtime/safe-slug.js";
 import { atomicWriteFileSync } from "../../runtime/atomic-write.js";
+import { appendEventBestEffort } from "./team-event.js";
 
 // ─── constants pinned by ADR-omcp-eb-02 ──────────────────────────────────────
 
@@ -158,6 +159,16 @@ export function runTeamOutboxWrite(
     };
   }
 
+  // RG-04b instrumentation: defensive entry event. Errors swallowed inside helper.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-outbox-write",
+    kind: "entry",
+    actor: opts.consumer,
+    requestId: opts.dispatchRequestId,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const now = opts.now ?? (() => new Date().toISOString());
   const sleep = opts.sleep ?? defaultBusyWait;
@@ -267,6 +278,17 @@ export function runTeamOutboxWrite(
       // best-effort cleanup
     }
   }
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-outbox-write",
+    kind: "exit",
+    actor: opts.consumer,
+    requestId: opts.dispatchRequestId,
+    cwd: opts.cwd,
+    detail: { exitCode: 0, truncated, retries },
+  });
 
   return {
     exitCode: 0,
@@ -585,6 +607,15 @@ export function runTeamOutboxRead(
     };
   }
 
+  // RG-04b instrumentation: defensive entry event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-outbox-read",
+    kind: "entry",
+    actor: opts.consumer,
+    cwd: opts.cwd,
+  });
+
   const cwd = opts.cwd ?? process.cwd();
   const pidDir = join(cwd, ".omcp", "state", "team", opts.sessionId);
   const outboxPath = join(pidDir, "outbox.jsonl");
@@ -648,6 +679,20 @@ export function runTeamOutboxRead(
   mkdirSync(pidDir, { recursive: true });
   // Use a separate atomicWriteFileSync import — already imported at top via runtime.
   atomicWriteCursor(cursorPath, newCursor);
+
+  // RG-04b instrumentation: defensive exit event.
+  appendEventBestEffort({
+    sessionId: opts.sessionId,
+    verb: "team-outbox-read",
+    kind: "exit",
+    actor: opts.consumer,
+    cwd: opts.cwd,
+    detail: {
+      exitCode: 0,
+      entries: entries.length,
+      parseErrors: parseErrors.length,
+    },
+  });
 
   return {
     exitCode: 0,
