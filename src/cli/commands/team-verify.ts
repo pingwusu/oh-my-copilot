@@ -37,6 +37,10 @@ import {
   writeModeState,
   type TeamState,
 } from "../../runtime/mode-state.js";
+import {
+  runTeamConflictRead,
+  type ConflictRecord,
+} from "./team-conflict.js";
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +59,13 @@ export interface VerifyReport {
   tsc: VerifyToolResult;
   biome: VerifyToolResult;
   ok: boolean;
+  /**
+   * RG-03 pre-flight conflict scan: unresolved conflict records observed
+   * before the verify tools ran. When non-empty, `ok` is forced to false
+   * and the verify exits non-zero — human must resolve via
+   * `omcp team-conflict-ack` before the shard merge can be declared clean.
+   */
+  unresolved_conflicts?: ConflictRecord[];
 }
 
 export interface VerifySpawnResult {
@@ -236,8 +247,22 @@ export function runTeamVerify(
   const tsc = runTool("npx", ["tsc", "--noEmit"]);
   const biome = runTool("npx", ["biome", "check", "src/"]);
 
+  // RG-03 pre-flight conflict scan. Surfaces unresolved conflicts from the
+  // per-shard mailbox at .omcp/state/team/<sid>/conflicts/<shard>.jsonl
+  // before declaring the verify clean. When unresolved conflicts are
+  // present, the verify exits non-zero — human resolves via
+  // `omcp team-conflict-ack` and re-runs verify.
+  const conflictScan = runTeamConflictRead({
+    sessionId: opts.sessionId,
+    cwd,
+  });
+  const unresolvedConflicts = conflictScan.conflicts;
+
   const ok =
-    vitest.exitCode === 0 && tsc.exitCode === 0 && biome.exitCode === 0;
+    vitest.exitCode === 0 &&
+    tsc.exitCode === 0 &&
+    biome.exitCode === 0 &&
+    unresolvedConflicts.length === 0;
   const iteration = nextIteration(pidDir);
   const maxLoops = resolveMaxLoops(opts.maxLoops);
   const ts = new Date().toISOString();
@@ -249,6 +274,9 @@ export function runTeamVerify(
     tsc,
     biome,
     ok,
+    ...(unresolvedConflicts.length > 0
+      ? { unresolved_conflicts: unresolvedConflicts }
+      : {}),
   };
 
   // Invariant 2 — atomic write to verify-report-N.json.
@@ -261,6 +289,9 @@ export function runTeamVerify(
       vitest.exitCode !== 0 ? "vitest" : null,
       tsc.exitCode !== 0 ? "tsc" : null,
       biome.exitCode !== 0 ? "biome" : null,
+      unresolvedConflicts.length > 0
+        ? `unresolved-conflicts(${unresolvedConflicts.length})`
+        : null,
     ].filter((s): s is string => s !== null);
 
     for (const idx of listWorkerIndices(pidDir)) {
@@ -764,12 +795,22 @@ export function runTeamVerifyCli(
     log(`  report:         ${result.reportPath}`);
   }
   if (!result.ok && result.report) {
+    const unresolved = result.report.unresolved_conflicts ?? [];
     const failed = [
       result.report.vitest.exitCode !== 0 ? "vitest" : null,
       result.report.tsc.exitCode !== 0 ? "tsc" : null,
       result.report.biome.exitCode !== 0 ? "biome" : null,
+      unresolved.length > 0
+        ? `unresolved-conflicts(${unresolved.length})`
+        : null,
     ].filter((s): s is string => s !== null);
     log(`  failed:         ${failed.join(", ")}`);
+    // RG-03 — surface unresolved conflicts so operators can map to acks.
+    for (const c of unresolved) {
+      log(
+        `  [conflict] shard=${c.shard} id=${c.conflict_id} worker=${c.worker_id} op=${c.attempted_op}`,
+      );
+    }
   }
 
   return result.exitCode;

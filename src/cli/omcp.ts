@@ -63,6 +63,11 @@ import {
   runTeamEventAppendCli,
   runTeamEventTailCli,
 } from "./commands/team-event.js";
+import {
+  runTeamConflictAckCli,
+  runTeamConflictReadCli,
+  runTeamConflictWriteCli,
+} from "./commands/team-conflict.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
 import {
   runTeamOutboxReadCli,
@@ -592,6 +597,81 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           type: opts.type,
           limit: opts.limit,
           json: opts.json,
+        });
+      },
+    );
+
+  // RG-03: conflict mailbox + 1MB rotation + ack-deletable records
+  program
+    .command(
+      "team-conflict-write <session-id> <shard> <worker-id> <attempted-op> <rationale>",
+    )
+    .description(
+      "RG-03: append conflict record to .omcp/state/team/<sid>/conflicts/<shard>.jsonl. 1MB rotation inside per-stream lockfile. Records carry producer_fork=omcp-r2.",
+    )
+    .action(
+      (
+        sessionId: string,
+        shard: string,
+        workerId: string,
+        attemptedOp: string,
+        rationale: string,
+      ) => {
+        process.exitCode = runTeamConflictWriteCli(
+          sessionId,
+          shard,
+          workerId,
+          attemptedOp,
+          rationale,
+        );
+      },
+    );
+
+  program
+    .command("team-conflict-read <session-id> [shard]")
+    .description(
+      "RG-03: read unresolved conflicts (default filters acked via <shard>.acked.jsonl). --exit-nonzero-if-unresolved composes onto team-verify pre-flight.",
+    )
+    .option("--include-acked", "include acked records in the result set")
+    .option("--json", "emit JSON instead of human-readable summary")
+    .option(
+      "--exit-nonzero-if-unresolved",
+      "exit 3 when unresolved conflicts present",
+    )
+    .action(
+      (
+        sessionId: string,
+        shard: string | undefined,
+        opts: {
+          includeAcked?: boolean;
+          json?: boolean;
+          exitNonzeroIfUnresolved?: boolean;
+        },
+      ) => {
+        process.exitCode = runTeamConflictReadCli(sessionId, {
+          shard,
+          includeAcked: opts.includeAcked,
+          json: opts.json,
+          exitNonZeroIfUnresolved: opts.exitNonzeroIfUnresolved,
+        });
+      },
+    );
+
+  program
+    .command("team-conflict-ack <session-id> <shard> <conflict-id>")
+    .description(
+      "RG-03: mark conflict resolved by appending ack to <shard>.acked.jsonl. conflict-id MUST be UUIDv4 (value team-conflict-write returned).",
+    )
+    .option("--acked-by <name>", "identifier of the acker. Default 'operator'.")
+    .action(
+      (
+        sessionId: string,
+        shard: string,
+        conflictId: string,
+        opts: { ackedBy?: string },
+      ) => {
+        process.exitCode = runTeamConflictAckCli(sessionId, shard, conflictId, {
+          ackedBy: opts.ackedBy,
         });
       },
     );
