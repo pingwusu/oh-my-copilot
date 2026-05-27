@@ -117,6 +117,23 @@ By default, ralph operates in PRD mode. A scaffold `prd.json` is auto-generated 
 9. **On rejection**: Fix the issues raised, re-verify with the same reviewer, then loop back to check if the story needs to be marked incomplete
 </Steps>
 
+<Skill_vs_Agent_Disambiguation>
+Copilot exposes two distinct invocation surfaces. Choose correctly:
+
+**Invoke a SKILL** (`/oh-my-copilot:<name>`) when:
+- You want the full autonomous workflow that the skill orchestrates (e.g., `/oh-my-copilot:critique` runs the structured critique loop end-to-end)
+- The action is user-facing and self-contained (runs in the current session context)
+- Examples: `/oh-my-copilot:cancel`, `/oh-my-copilot:ai-slop-cleaner`, `/oh-my-copilot:critique`
+
+**Dispatch an AGENT** (`/fleet <agent-name> ...`) when:
+- You need a specialist sub-process with its own context window (e.g., `/fleet critic` for the approval pass inside ralph's Step 7)
+- The work is a discrete subtask that should run in parallel or be isolated from the main session
+- Examples: `/fleet architect`, `/fleet critic`, `/fleet executor`
+
+**Quick rule**: skills = workflows you invoke; agents = workers you dispatch.
+Do not invoke `/oh-my-copilot:critique` when you mean to dispatch the `critic` agent, and vice versa — they have different scopes and termination semantics.
+</Skill_vs_Agent_Disambiguation>
+
 <Tool_Usage>
 - Dispatch a subagent through `/fleet` targeting the `architect` agent for architect verification cross-checks when changes are security-sensitive, architectural, or involve complex multi-system integration
 - Dispatch a subagent through `/fleet` targeting `critic` when `--critic=critic`
@@ -248,7 +265,7 @@ Why bad: Did not refine scaffold criteria into task-specific ones. This is PRD t
 
 <Escalation_And_Stop_Conditions>
 - Stop and report when a fundamental blocker requires user input (missing credentials, unclear requirements, external service down)
-- Stop when the user says "stop", "cancel", or "abort" -- run `/oh-my-copilot:cancel`
+- Stop when the user says "stop", "cancel", or "abort" -- run `/oh-my-copilot:cancel` before exiting to clean up all mode state files
 - Continue working when the hook system sends "The boulder never stops" -- this means the iteration continues
 - If the selected reviewer rejects verification, fix the issues and re-verify (do not stop)
 - If the same issue recurs across 3+ iterations, report it as a potential fundamental problem
