@@ -63,6 +63,36 @@ The consensus workflow:
 
 Follow the Plan skill's full documentation for consensus mode details.
 
+## Planning/Execution Boundary
+
+**Ralplan produces a plan. It does not execute the plan.**
+
+This boundary is load-bearing: the Planner agent, Architect, and Critic operate in read-only analysis mode throughout the consensus loop. They MUST NOT write code, modify project files, or invoke execution skills during the planning phase.
+
+### What the Planner agent may do during planning
+
+- Read source files, tests, and documentation
+- Query structure via Glob, Grep, and Read
+- Draft plan documents to `.omc/plans/`
+- Ask clarifying questions
+
+### What the Planner agent must NOT do during planning
+
+- Write or edit source files (`src/**`, `agents/**`, `skills/**`)
+- Run builds, tests, or shell commands that mutate state
+- Invoke `/oh-my-copilot:ralph`, `/oh-my-copilot:autopilot`, `/oh-my-copilot:team`, or any execution skill
+- Emit `omcp skill-invocation-emit` events for execution skills
+
+### Handoff to execution
+
+Once the Critic returns `APPROVE`, the plan is handed off to an execution mode. Ralplan itself does not make this transition — it outputs the final plan and stops. The user (or the calling workflow) chooses the execution path:
+
+- `/oh-my-copilot:team` — parallel coordinated agents (recommended for multi-file work)
+- `/oh-my-copilot:ralph` — sequential execution with per-step verification
+- `/oh-my-copilot:autopilot` — autonomous end-to-end execution
+
+> If you are using `/oh-my-copilot:deep-dive`, its Phase 5 (Execution Bridge) is the canonical handoff point — it structures the same `{ scope, currentBranch, currentWorktree, detectedGuidance, suggestedAction }` payload that ralplan's approval step passes to the execution mode.
+
 ## Pre-Execution Gate
 
 ### Why the Gate Exists
