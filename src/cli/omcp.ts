@@ -69,6 +69,7 @@ import {
   runTeamConflictWriteCli,
 } from "./commands/team-conflict.js";
 import { runTeamPushPromptCli } from "./commands/team-push-prompt.js";
+import { runTeamEventHealthCheckCli } from "./commands/team-event-health-check.js";
 import { runTeamLoopCli } from "./commands/team-loop.js";
 import {
   runTeamOutboxReadCli,
@@ -686,6 +687,26 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
     .action((sessionId: string, workerIndex: string, prompt: string) => {
       process.exitCode = runTeamPushPromptCli(sessionId, workerIndex, prompt);
     });
+
+  // RG-05: observability — event-log health-check verb
+  program
+    .command("team-event-health-check <session-id>")
+    .description(
+      "RG-05: inspect events.jsonl + state dir for health: poison records (PM-G ts violations), rotation anomalies (orphaned .jsonl.N without live .jsonl), orphaned lockfiles (older than OUTBOX_STALE_LOCK_MS), non-empty dead-letter-push.jsonl (PM-D). Exit 0 healthy / 4 warning / 5 critical / 2 invalid argv.",
+    )
+    .option(
+      "--since <iso-ts>",
+      "ISO-8601 lower bound for poison-count scan (default: scan entire file)",
+    )
+    .option("--json", "emit JSON instead of human-readable summary")
+    .action(
+      (sessionId: string, opts: { since?: string; json?: boolean }) => {
+        process.exitCode = runTeamEventHealthCheckCli(sessionId, {
+          since: opts.since,
+          json: opts.json,
+        });
+      },
+    );
 
   program
     .command("team-collect <session-id>")
