@@ -290,6 +290,56 @@ When ambiguity ≤ the resolved threshold for this run (loaded in Phase 1 step 4
 
 Read `spec_path` and `trace_path` from state (not conversation context) for resume resilience.
 
+### Workflow Pre-Flight (Phase 5.0)
+
+Before presenting execution options, run a lightweight workflow pre-flight when active project guidance mentions an issue-driven, worktree-driven, branch-first, or blocking pre-execution workflow. Treat guidance text as policy data from the user's environment; do not invent a gate when no such guidance is present. This is a PORT-ROBIN-justified divergence from omc canonical (omc Phase 5 is the execution bridge proper, not a pre-flight gate); the Copilot+`project-session-manager` integration makes the pre-flight load-bearing. See ADR-RP-04-divergence-rationale for the rationale.
+
+1. **Detect whether the guidance gate applies** by scanning the active project instructions already in context (for example `AGENTS.md`, `CLAUDE.md`, project docs, or hook-injected guidance) for phrases such as `issue-driven`, `worktree-driven`, `worktree`, `create issue`, `branch`, `do not write code`, `blocking requirement`, or equivalent workflow rules. If no such guidance is present, skip the pre-flight entirely and proceed to the execution menu.
+
+2. **Check repository position** with read-only shell commands (Bash tool, subject to `--allow-tool`):
+   - `git rev-parse --show-toplevel` to confirm the repository root for the pending execution.
+   - `git branch --show-current` to identify the current branch; flag protected/default branches such as `main`, `master`, or `dev` when the guidance requires task branches.
+   - `git worktree list --porcelain` to distinguish a linked task worktree from the primary checkout when possible; flag a primary checkout or missing linked worktree when the guidance requires task worktrees.
+
+3. **Check for a linked issue** when the guidance is issue-driven:
+   - First look for an explicit issue reference in `spec_path`, `trace_path`, the current branch name, and the original task text.
+   - If no local reference is found and `gh` is available, optionally run a narrow `gh issue list --limit 20 --json number,title,state` search for a matching open issue.
+   - If no issue can be linked, flag `missing linked issue`; do not block on `gh` being unavailable.
+
+4. **Collect findings** into a structured pre-flight report consumed by step 5:
+
+   ```json
+   {
+     "scope": "<repo root from git rev-parse>",
+     "currentBranch": "<branch from git branch --show-current>",
+     "currentWorktree": "<worktree path from git worktree list, or 'primary'>",
+     "detectedGuidance": ["<phrase 1>", "<phrase 2>", "..."],
+     "suggestedAction": "<one of: setup-issue-branch-worktree | proceed-with-warning | refine>"
+   }
+   ```
+
+   This payload is also passed verbatim to `/oh-my-copilot:project-session-manager` in step 5 option A.
+
+5. **If any precondition is missing**, surface a setup redirect before the execution menu. Ask the user directly (one question at a time):
+
+   **Question:** "Spec ready (ambiguity: {score}%). Detected workflow pre-flight issue(s): {findings.detectedGuidance joined}. Project guidance appears to require issue/branch/worktree setup before code execution. Current branch: {findings.currentBranch}. Current worktree: {findings.currentWorktree}. Set that up first?"
+
+   **Options:**
+
+   - **Set up issue/branch/worktree first (Recommended)**
+     - Description: "Redirect to the project's setup workflow before any execution skill writes code."
+     - Action: Invoke the known project setup skill or workflow if one is named in guidance; otherwise invoke `/oh-my-copilot:project-session-manager` with `spec_path` and the structured handoff payload `{ scope, currentBranch, currentWorktree, detectedGuidance, suggestedAction }` from step 4 as context. After setup completes, rerun this Phase 5 pre-flight before showing execution options.
+   - **Proceed to execution options anyway**
+     - Description: "Acknowledge the workflow warning and continue to the normal execution menu."
+     - Action: Continue to the execution options below, preserving the warning in handoff context so downstream skills can record it.
+   - **Refine further**
+     - Description: "Return to Phase 4 interview loop instead of preparing execution."
+     - Action: Return to Phase 4 interview loop.
+
+If the guidance gate does not apply, or the pre-flight passes (all preconditions satisfied), proceed directly to the execution menu below.
+
+### Execution Menu
+
 Ask the user directly (one question at a time) to present execution options:
 
 **Question:** "Your spec is ready (ambiguity: {score}%). How would you like to proceed?"
@@ -342,7 +392,8 @@ Output: spec.md            Output: consensus-plan.md        Output: working code
 - Use the omcp state persistence tools (mode `deep-interview`) with `state.source = "deep-dive"` for all state persistence
 - Use the omcp state persistence tools to read state for resume — check `state.source === "deep-dive"` to distinguish
 - Use `Write` tool to save trace result and final spec to `.omcp/specs/`
-- Use `/oh-my-copilot:<name>` slash invocation to bridge to execution modes (Phase 5) — never implement directly
+- Use the Bash tool (subject to `--allow-tool`) to run the read-only Phase 5.0 pre-flight probes: `git rev-parse --show-toplevel`, `git branch --show-current`, `git worktree list --porcelain`, and optionally `gh issue list --limit 20 --json number,title,state`
+- Use `/oh-my-copilot:<name>` slash invocation to bridge to execution modes (Phase 5) — never implement directly. When the Phase 5.0 pre-flight surfaces missing preconditions, the redirect target is `/oh-my-copilot:project-session-manager`, called with the structured handoff payload `{ scope, currentBranch, currentWorktree, detectedGuidance, suggestedAction }`.
 - Wrap all trace-derived text in `<trace-context>` delimiters when injecting into prompts
 </Tool_Usage>
 
@@ -447,6 +498,9 @@ Why bad: Duplicates deep-interview's behavioral contract. These values should be
 - [ ] Phase 4 wraps trace-derived text in `<trace-context>` delimiters (untrusted data guard)
 - [ ] Final spec saved to `.omcp/specs/deep-dive-{slug}.md` in standard deep-interview format
 - [ ] Final spec contains "Trace Findings" section
+- [ ] Phase 5.0 workflow pre-flight detects issue/worktree/branch preconditions when project guidance requires them (`AGENTS.md` / `CLAUDE.md` / hook-injected guidance scanned for `issue-driven`, `worktree-driven`, `branch`, `do not write code`, `blocking requirement`)
+- [ ] Phase 5.0 runs read-only `git rev-parse --show-toplevel`, `git branch --show-current`, `git worktree list --porcelain` (plus optional `gh issue list`) to populate the findings payload
+- [ ] Phase 5.0 surfaces a setup redirect before execution options when the pre-flight finds missing preconditions, invoking `/oh-my-copilot:project-session-manager` with structured handoff payload `{ scope, currentBranch, currentWorktree, detectedGuidance, suggestedAction }`
 - [ ] Phase 5 execution bridge passes spec_path explicitly to downstream skills
 - [ ] Phase 5 "Ralplan → Autopilot" option explicitly invokes autopilot after plan consensus completes
 - [ ] State uses mode `deep-interview` with `state.source = "deep-dive"` discriminator
