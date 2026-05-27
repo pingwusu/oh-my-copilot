@@ -68,8 +68,13 @@ The name "deep dive" naturally implies this flow: first dig deep into the proble
    - Default lanes (unless the problem strongly suggests a better partition):
      1. **Code-path / implementation cause**
      2. **Config / environment / orchestration cause**
-     3. **Measurement / artifact / assumption mismatch cause**
+     3. **Measurement / artifact / assumption mismatch cause** — covers verification-method defects, not just system defects. Examples: the verification query reuses a single dimensional key across distinct entities, tenants, streams, or groups; the comparison filter shape does not match the schema grain; or the catalog or column name was assumed portable across runtimes without enumeration. This includes multi-entity premise/key-assumption mismatches.
+   - **Premise audit before trace lanes spawn** (Robin-extension, justified divergence — omc default 3-lane lacks this): before confirming hypotheses with the user, restate the user's premise as a falsifiable proposition and audit whether it is actually true. If the problem says "X is empty but Y is not", "N streams differ", "values mismatch across entities", or any other cross-entity/cross-tenant discrepancy claim, lane 3 MUST test the verification premise first. Enumerate entity dimensions (cohort IDs, tenant IDs, partition keys, dimensional keys per stream) via metadata table or schema introspection before treating zero-row or mismatch results as evidence of a system defect; the result may instead be a verification-methodology defect. Record the premise-audit finding in the Phase 2 lane-confirmation message so the user can correct a false premise before any tracer cycles are spent.
    - For brownfield: dispatch `explore` agent through `/fleet` to identify relevant codebase areas, store as `codebase_context` for later injection
+4.5. **Load runtime settings** (PORT-OMC via-Robin — confirmed at omc `skills/deep-dive/SKILL.md:433`):
+   - Read `[$COPILOT_CONFIG_DIR|~/.copilot]/settings.json` and `./.copilot/settings.json` (project overrides user)
+   - Resolve `omcp.deepDive.ambiguityThreshold` into `<resolvedThreshold>`; if it is undefined, use `0.2` (the omc canonical default at line 433)
+   - Substitute `<resolvedThreshold>` into the `threshold` field of the state initialization below, and use it everywhere subsequent prose references the ambiguity gate. Operators who want a stricter gate can set `omcp.deepDive.ambiguityThreshold = 0.1`; users who want a looser gate can set `0.3`. The runtime read makes this configurable without editing the SKILL.
 5. **Initialize state** via omcp state persistence tools (mode `deep-interview`):
 
 ```json
@@ -88,7 +93,7 @@ The name "deep dive" naturally implies this flow: first dig deep into the proble
     "spec_path": null,
     "rounds": [],
     "current_ambiguity": 1.0,
-    "threshold": 0.2,
+    "threshold": "<resolvedThreshold>",
     "codebase_context": null,
     "challenge_modes_used": [],
     "ontology_snapshots": []
@@ -137,6 +142,12 @@ Use **Copilot's built-in team mode** (via `/fleet` parallel dispatch, or `omcp t
    - Rank evidence strength (from controlled reproductions → speculation)
    - Name the **critical unknown** for the lane
    - Recommend the best **discriminating probe**
+   - For **Lane 3 (measurement/artifact/assumption mismatch) — `ownership_scope` dimension** (Robin-extension, justified divergence — omc default 3-lane lacks this): classify every candidate MOVE destination by `ownership_scope` before ranking recommendations. This is the safety dimension that prevents trace synthesis from blithely suggesting a cross-boundary move:
+     - `personal-config`: user-level dotfiles, `[$COPILOT_CONFIG_DIR|~/.copilot]/`, personal repositories, or user-only agent rules
+     - `shared-config`: company/org repositories, team-maintained config, or multi-tenant shared rules
+     - `external`: third-party, vendor, or OSS upstream repositories outside the user's ownership
+     - `project-scoped`: per-project storage owned by the current project boundary
+   - For Lane 3, compare source and destination `ownership_scope`; any cross-boundary MOVE (for example `personal-config` → `shared-config`) MUST be flagged with an explicit warning and MUST NOT be surfaced as the default recommendation. Prefer COMPRESS, KEEP, or a same-scope MOVE as the default when available.
 4. **Run a rebuttal round** between the leading hypothesis and the strongest alternative
 5. **Detect convergence**: if two "different" hypotheses reduce to the same mechanism, merge them explicitly
 6. **Leader synthesis**: produce the ranked output below
@@ -174,6 +185,21 @@ Save to `.omcp/specs/deep-dive-trace-{slug}.md`:
 - **Lane 1 ({hypothesis_1})**: {critical_unknown_1}
 - **Lane 2 ({hypothesis_2})**: {critical_unknown_2}
 - **Lane 3 ({hypothesis_3})**: {critical_unknown_3}
+
+## Lane 3 Misplacement / SoT Ownership Scope
+For each MOVE candidate discovered by Lane 3, include:
+
+| Source | Candidate destination | ownership_scope | Boundary relationship | Default? | Warning |
+|--------|-----------------------|-----------------|-----------------------|----------|---------|
+| ... | ... | personal-config/shared-config/external/project-scoped | same-scope/cross-boundary | yes/no | ... |
+
+Cross-boundary MOVE candidates MUST have `Default? = no` and an explicit warning explaining the source/destination ownership mismatch. They may be listed as flagged alternatives, but the ranked synthesis MUST NOT present them as the default recommendation.
+
+## Premise Audit Outcome
+- **Stated premise**: [restated as a falsifiable proposition]
+- **Audit method**: [enumeration / schema introspection / metadata query used]
+- **Verdict**: premise-confirmed | premise-falsified | inconclusive
+- **If falsified**: what the verification artifact actually means (often a verification-methodology defect rather than a system defect)
 
 ## Rebuttal Round
 - Best rebuttal to leader: ...
@@ -252,7 +278,7 @@ No overrides to the interview mechanics themselves — only the 3 initialization
 
 ### Spec Generation
 
-When ambiguity ≤ threshold (default 0.2), generate the spec in **standard deep-interview format** with one addition:
+When ambiguity ≤ the resolved threshold for this run (loaded in Phase 1 step 4.5; defaults to `0.2` per omc canonical `skills/deep-dive/SKILL.md:433`, overridable via `omcp.deepDive.ambiguityThreshold` in `.copilot/settings.json`), generate the spec in **standard deep-interview format** with one addition:
 
 - All standard sections: Goal, Constraints, Non-Goals, Acceptance Criteria, Assumptions Exposed, Technical Context, Ontology, Ontology Convergence, Interview Transcript
 - **Additional section: "Trace Findings"** — summarizes the trace results (most likely explanation, per-lane critical unknowns resolved, evidence that shaped the interview)
@@ -408,9 +434,13 @@ Why bad: Duplicates deep-interview's behavioral contract. These values should be
 <Final_Checklist>
 - [ ] SKILL.md has valid YAML frontmatter with name, triggers, pipeline, handoff
 - [ ] Phase 1 detects brownfield/greenfield and generates 3 hypotheses
+- [ ] Phase 1 step 4.5 loads `omcp.deepDive.ambiguityThreshold` from `.copilot/settings.json` (or falls back to omc canonical default `0.2`)
+- [ ] Phase 1 runs a premise audit before lane confirmation when the problem statement makes a cross-entity/cross-tenant discrepancy claim
 - [ ] Phase 2 confirms hypotheses by asking the user directly (one question at a time, 1 round)
 - [ ] Phase 3 runs trace with 3 parallel lanes through `/fleet` (sequential fallback)
 - [ ] Phase 3 saves trace result to `.omcp/specs/deep-dive-trace-{slug}.md` with per-lane critical unknowns
+- [ ] Lane 3 MOVE candidates include `ownership_scope` and cross-boundary MOVE candidates are warned/flagged, not default recommendations
+- [ ] Trace output includes a "Premise Audit Outcome" section recording premise-confirmed/falsified/inconclusive
 - [ ] Phase 4 starts with 3-point injection (initial_idea, codebase_context, question_queue from per-lane unknowns)
 - [ ] Phase 4 references deep-interview SKILL.md Phases 2-4 (not duplicated inline)
 - [ ] Phase 4 handles low-confidence trace gracefully
@@ -427,7 +457,7 @@ Why bad: Duplicates deep-interview's behavioral contract. These values should be
 <Advanced>
 ## Configuration
 
-Optional settings in `~/.copilot/config.json` (or `.copilot/settings.json` per-project):
+Optional settings in `~/.copilot/settings.json` (user-level) or `./.copilot/settings.json` (project-level, overrides user):
 
 ```json
 {
@@ -441,6 +471,8 @@ Optional settings in `~/.copilot/config.json` (or `.copilot/settings.json` per-p
   }
 }
 ```
+
+**Runtime read**: Phase 1 step 4.5 reads `omcp.deepDive.ambiguityThreshold` at SKILL execution time. The default `0.2` mirrors omc canonical (`oh-my-claudecode/4.9.3/skills/deep-dive/SKILL.md:433`). Operators who want a stricter spec gate can set `0.1`; users running exploratory deep-dives can loosen to `0.3`. The threshold is substituted into the state initialization and into every prose reference to the ambiguity gate; the SKILL itself does not need to be edited to retune.
 
 ## Resume
 
