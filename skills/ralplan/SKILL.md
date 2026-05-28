@@ -73,7 +73,7 @@ This boundary is load-bearing: the Planner agent, Architect, and Critic operate 
 
 - Read source files, tests, and documentation
 - Query structure via Glob, Grep, and Read
-- Draft plan documents to `.omc/plans/`
+- Draft plan documents to `.omcp/plans/`
 - Ask clarifying questions
 
 ### What the Planner agent must NOT do during planning
