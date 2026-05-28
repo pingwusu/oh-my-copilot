@@ -11,6 +11,7 @@ triggers:
   - "what needs fixing"
   - "audit codebase"
 level: 3
+adr: ADR-RP-08
 model:
   claude: claude-opus-4.7
   gpt: gpt-5.4
