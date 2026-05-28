@@ -63,6 +63,14 @@ import {
   runTeamEventAppendCli,
   runTeamEventTailCli,
 } from "./commands/team-event.js";
+import { runSkillInvocationEmitCli } from "./commands/skill-invocation-emit.js";
+import {
+  runTeamWorktreeCleanupCli,
+  runTeamWorktreeConflictCheckCli,
+  runTeamWorktreeCreateCli,
+  runTeamWorktreeListCli,
+  runTeamWorktreeMergeCli,
+} from "./commands/team-worktree.js";
 import {
   runTeamConflictAckCli,
   runTeamConflictReadCli,
@@ -598,6 +606,119 @@ export async function runCli(argv: string[] = process.argv): Promise<void> {
           since: opts.since,
           type: opts.type,
           limit: opts.limit,
+          json: opts.json,
+        });
+      },
+    );
+
+  // RP-09 / F28: skill-invocation telemetry (global, NOT session-scoped)
+  program
+    .command("skill-invocation-emit")
+    .description(
+      "RP-09: append skill-invocation record to .omcp/state/skill-invocations.jsonl (global). Per-stream lockfile + 1MB rotation. Records carry producer_fork=omcp-r2. ts validated within (now - 24h, now + 5min). Exit 0/2/4/5/1. Mitigates PM-1 via adoption-signal aggregation.",
+    )
+    .requiredOption(
+      "--skill <name>",
+      "skill name being invoked (validated via assertSafeSlug, 1-80 chars)",
+    )
+    .requiredOption(
+      "--event <event>",
+      "event kind: started | completed | failed",
+    )
+    .option("--detail <json>", "optional JSON-encoded detail payload")
+    .action(
+      (opts: { skill: string; event: string; detail?: string }) => {
+        let detail: unknown;
+        if (opts.detail !== undefined) {
+          try {
+            detail = JSON.parse(opts.detail);
+          } catch {
+            console.error(
+              `omcp skill-invocation-emit: --detail must be valid JSON (got: ${opts.detail})`,
+            );
+            process.exitCode = 2;
+            return;
+          }
+        }
+        process.exitCode = runSkillInvocationEmitCli({
+          skill: opts.skill,
+          event: opts.event,
+          detail,
+        });
+      },
+    );
+
+  // RP-12 / F13: 5 stateless team-worktree verbs
+  program
+    .command("team-worktree-create <team> <worker>")
+    .description(
+      "RP-12: create isolated worker worktree at .omcp/worktrees/{team}/{worker} on branch omcp-team/{team}/{worker} (PRINCIPLED-DIVERGENCE per Q-v3-A).",
+    )
+    .option("--base <branch>", "base branch to fork from (default main)")
+    .action((team: string, worker: string, opts: { base?: string }) => {
+      process.exitCode = runTeamWorktreeCreateCli(team, worker, {
+        base: opts.base,
+      });
+    });
+
+  program
+    .command("team-worktree-list [team]")
+    .description("RP-12: list team worktrees (one team or all teams)")
+    .option("--json", "emit JSON instead of human-readable summary")
+    .action((team: string | undefined, opts: { json?: boolean }) => {
+      process.exitCode = runTeamWorktreeListCli(team, { json: opts.json });
+    });
+
+  program
+    .command("team-worktree-merge <team> <worker>")
+    .description("RP-12: merge worker branch back to base (default --no-ff)")
+    .option("--base <branch>", "base branch (default main)")
+    .option("--no-ff", "default; pass --no-no-ff to allow fast-forward")
+    .action(
+      (
+        team: string,
+        worker: string,
+        opts: { base?: string; noFf?: boolean },
+      ) => {
+        process.exitCode = runTeamWorktreeMergeCli(team, worker, {
+          base: opts.base,
+          noFf: opts.noFf,
+        });
+      },
+    );
+
+  program
+    .command("team-worktree-cleanup <team> [worker]")
+    .description(
+      "RP-12: remove worker worktree(s); --force skips uncommitted-changes guard",
+    )
+    .option(
+      "--force",
+      "skip the uncommitted-changes guard + force-remove the branch",
+    )
+    .action(
+      (team: string, worker: string | undefined, opts: { force?: boolean }) => {
+        process.exitCode = runTeamWorktreeCleanupCli(team, worker, {
+          force: opts.force,
+        });
+      },
+    );
+
+  program
+    .command("team-worktree-conflict-check <team> <worker>")
+    .description(
+      "RP-12: non-destructive pre-flight: detect merge conflicts before attempting merge",
+    )
+    .option("--base <branch>", "base branch (default main)")
+    .option("--json", "emit JSON instead of human-readable summary")
+    .action(
+      (
+        team: string,
+        worker: string,
+        opts: { base?: string; json?: boolean },
+      ) => {
+        process.exitCode = runTeamWorktreeConflictCheckCli(team, worker, {
+          base: opts.base,
           json: opts.json,
         });
       },
