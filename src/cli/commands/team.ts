@@ -39,6 +39,30 @@ import {
   resolveHeartbeatFreshnessMs,
   resolveHeartbeatIntervalMs,
 } from "./team-heartbeat.js";
+// RP-12: re-export 5 team-worktree CLI verbs so callers can dispatch via
+// `import {...} from "./team.js"`. The omcp.ts dispatcher wires them
+// directly via `./team-worktree.js`; this re-export keeps team-worktree
+// reachable via the team sibling for orphan-module wiring invariants.
+export {
+  branchNameFor as teamWorktreeBranchNameFor,
+  pathLengthGuard as teamWorktreePathLengthGuard,
+  runTeamWorktreeCleanup,
+  runTeamWorktreeCleanupCli,
+  runTeamWorktreeConflictCheck,
+  runTeamWorktreeConflictCheckCli,
+  runTeamWorktreeCreate,
+  runTeamWorktreeCreateCli,
+  runTeamWorktreeList,
+  runTeamWorktreeListCli,
+  runTeamWorktreeMerge,
+  runTeamWorktreeMergeCli,
+  TEAM_WORKTREE_BRANCH_PREFIX,
+  TEAM_WORKTREE_DEFAULT_BASE,
+  TEAM_WORKTREE_MAX_PATH_LEN,
+  TEAM_WORKTREE_SUBDIR,
+  teamWorktreesRoot,
+  worktreePathFor,
+} from "./team-worktree.js";
 
 export interface TeamSpec {
   count: number;

@@ -44,7 +44,76 @@ export const OmcpPaths = {
   NOTEPADS: ".omcp/notepads",
   LOGS: ".omcp/logs",
   SHARED_MEMORY: ".omcp/state/shared-memory",
+  /**
+   * RP-12 team worktree root. Stateless team-worktree CLI verbs create
+   * isolated worker worktrees here at `.omcp/worktrees/{team}/{worker}`
+   * on branch `omcp-team/{team}/{worker}` (PRINCIPLED-DIVERGENCE per
+   * Q-v3-A 4-sibling-token decision; omc canonical uses `omc-team/`).
+   * Cross-fork readers (X1 fixture) use forward-compat membership check
+   * for `{omc-team/, omcp-team/}`.
+   */
+  WORKTREES: ".omcp/worktrees",
 } as const;
+
+// ──────────────────────────────────────────────────────────────────────────
+// RP-12 — Traversal carve-out (Critic C2)
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns true when a path relative to `.omcp/` should be skipped by
+ * state-traversal walkers (RG-04 readers, events scanners, future
+ * recursive walkers under `.omcp/`).
+ *
+ * Rationale (RP-12 Critic C2): worker worktrees created under
+ * `.omcp/worktrees/{team}/{worker}` contain full `.git` subtrees +
+ * unrelated source files. Walkers that recurse under `.omcp/` MUST skip
+ * `worktrees/**` to avoid:
+ *   1. descending into worker `.git/` files (and creating apparent state
+ *      corruption when the walker stat-races a git-worktree-add operation)
+ *   2. mis-attributing unrelated source files to omcp state
+ *   3. inflating diagnostic output (a 1000-file worktree dwarfs the actual
+ *      `.omcp/state/` payload)
+ *
+ * Usage: walker call sites that iterate descendants of `.omcp/` should
+ * filter with this helper. Walkers that target a specific subtree (e.g.
+ * `.omcp/state/sessions/`) directly already avoid the issue.
+ *
+ * Walker call site inventory (as of RP-12 landing):
+ *   - src/runtime/trace.ts:59 — walks `.omcp/state/trace/` (not under
+ *     `worktrees/`; defensively safe, no change needed)
+ *   - src/hud/state.ts:319 — walks `.omcp/state/` for session subdirs
+ *     (not under `worktrees/`; safe)
+ *   - src/cli/commands/team-event-health-check.ts:205,262 — walks
+ *     `.omcp/state/team/<sid>/` (safe)
+ *   - src/cli/commands/team-conflict.ts:399 — walks
+ *     `.omcp/state/team/<sid>/conflicts/` (safe)
+ *   - src/runtime/shared-memory.ts:76,114 — walks
+ *     `.omcp/state/shared-memory/` (safe)
+ *   - src/lib/worktree-paths.ts:381 (listSessionIds) — walks
+ *     `.omcp/state/sessions/` (safe)
+ *   - src/cli/commands/cleanup.ts:215 (safeReaddir) — generic; callers
+ *     pass specific subdirs (safe)
+ *   - src/mcp/state-server.ts:66 — walks `.omcp/state/{sessionId}/` for
+ *     `.json` files (safe)
+ *   - src/mcp/hermes-bridge.ts:359,416 — walks hermes-specific roots,
+ *     not `.omcp/` directly (safe)
+ *   - src/cli/commands/state.ts:52,119 — walks `.omcp/state/` for the
+ *     `state list` verb (NOT under worktrees but DEFENSIVE: future
+ *     refactor that walks `.omcp/` root MUST apply this filter)
+ *
+ * @param relpath path relative to `.omcp/` (forward-slash or
+ *   platform-native separator both accepted)
+ * @returns true if the walker should skip this entry
+ */
+export function shouldSkipForOmcpTraversal(relpath: string): boolean {
+  if (typeof relpath !== "string" || relpath.length === 0) return false;
+  // Normalize separators — accept both POSIX and Windows.
+  const normalized = relpath.replace(/\\/g, "/");
+  // Match `worktrees`, `worktrees/`, or `worktrees/<anything>`.
+  if (normalized === "worktrees") return true;
+  if (normalized.startsWith("worktrees/")) return true;
+  return false;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Worktree detection (LRU-cached)
